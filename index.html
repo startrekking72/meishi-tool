@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<title>名刺管理ツール</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --text: #24221f;
+    --sub: #7a756a;
+    --accent: #c2883f;
+    --accent-dark: #9c6c2f;
+    --border: #ece6d8;
+    --danger: #d3543a;
+    --chip: #fbf4e6;
+    --shadow: 0 1px 3px rgba(60, 50, 20, 0.06), 0 1px 2px rgba(60, 50, 20, 0.04);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Hiragino Sans", "Yu Gothic", "Meiryo", -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  header {
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  h1 {
+    margin: 0 0 2px;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .status {
+    font-size: 12px;
+    color: var(--sub);
+    min-height: 16px;
+  }
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 14px 12px 40px;
+  }
+  section.panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow);
+  }
+  h2 {
+    margin: 0 0 12px;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--accent-dark);
+  }
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 12px;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field.full { grid-column: 1 / -1; }
+  label { font-size: 12px; color: var(--sub); }
+  input[type=text], input[type=tel], input[type=email], input[type=date], textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--chip);
+    color: var(--text);
+    font-size: 16px;
+    font-family: inherit;
+    outline: none;
+  }
+  input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 60px; line-height: 1.6; }
+  .form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+  button, .file-btn {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    touch-action: manipulation;
+  }
+  button:active, .file-btn:active { transform: scale(0.98); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn-danger { color: var(--danger); border-color: var(--danger); }
+  .btn-small { padding: 6px 10px; font-size: 12px; border-radius: 6px; }
+  .file-btn input[type=file] { display: none; }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .search-box { margin-bottom: 14px; }
+  .search-box input { font-size: 16px; }
+
+  .card-list { display: flex; flex-direction: column; gap: 10px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    position: relative;
+    box-shadow: var(--shadow);
+  }
+  .card-name { font-size: 16px; font-weight: 700; margin: 0 0 2px; }
+  .card-sub { font-size: 13px; color: var(--sub); margin: 0 0 8px; }
+  .card-row { font-size: 13px; margin: 2px 0; display: flex; gap: 6px; }
+  .card-row .k { color: var(--sub); flex: 0 0 auto; min-width: 4.5em; }
+  .card-memo {
+    margin-top: 8px;
+    font-size: 13px;
+    white-space: pre-wrap;
+    background: var(--chip);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .card-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    justify-content: flex-end;
+  }
+  .empty {
+    text-align: center;
+    color: var(--sub);
+    font-size: 13px;
+    padding: 30px 10px;
+  }
+  .hint { font-size: 12px; color: var(--sub); line-height: 1.6; margin-top: 8px; }
+  footer { padding: 10px 16px 24px; font-size: 11px; color: var(--sub); text-align: center; }
+
+  .photo-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  #photoPreviewWrap { margin-top: 10px; }
+  #photoPreview {
+    max-width: 160px;
+    max-height: 160px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    display: block;
+  }
+  .card-top { display: flex; gap: 10px; align-items: flex-start; }
+  .card-headtext { flex: 1; min-width: 0; }
+  .card-thumb {
+    flex: 0 0 auto;
+    width: 60px;
+    height: 60px;
+    object-fit: cover;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  #lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 16, 8, 0.82);
+    z-index: 50;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  #lightbox.show { display: flex; }
+  #lightbox img { max-width: 100%; max-height: 100%; border-radius: 10px; }
+
+  .details-panel {
+    cursor: default;
+  }
+  .details-panel summary {
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--accent-dark);
+    list-style: none;
+  }
+  .details-panel summary::-webkit-details-marker { display: none; }
+  .details-panel summary::before {
+    content: "▶ ";
+    font-size: 11px;
+    color: var(--accent);
+  }
+  .details-panel[open] summary::before {
+    content: "▼ ";
+  }
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 16, 8, 0.5);
+    z-index: 60;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 24px 12px;
+    overflow-y: auto;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal-box {
+    background: var(--panel);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border);
+    padding: 18px;
+    width: 100%;
+    max-width: 480px;
+  }
+  .modal-box h2 {
+    margin: 0 0 12px;
+    font-size: 16px;
+    color: var(--accent-dark);
+  }
+
+  @media (max-width: 560px) {
+    .form-grid { grid-template-columns: 1fr; }
+    header { padding: 12px 12px 8px; }
+    main { padding: 10px 8px 30px; }
+    button, .file-btn { flex: 1 1 auto; justify-content: center; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>名刺管理ツール</h1>
+  <div class="status" id="status">読み込み中…</div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2 id="formTitle">新しい名刺を追加</h2>
+    <div class="form-grid">
+      <div class="field">
+        <label>氏名</label>
+        <input type="text" id="f_name" placeholder="山田 太郎">
+      </div>
+      <div class="field">
+        <label>会社名</label>
+        <input type="text" id="f_company" placeholder="株式会社〇〇">
+      </div>
+      <div class="field">
+        <label>部署</label>
+        <input type="text" id="f_department" placeholder="営業部">
+      </div>
+      <div class="field">
+        <label>役職</label>
+        <input type="text" id="f_title" placeholder="部長">
+      </div>
+      <div class="field">
+        <label>電話番号</label>
+        <input type="tel" id="f_phone" placeholder="03-1234-5678">
+      </div>
+      <div class="field">
+        <label>メールアドレス</label>
+        <input type="email" id="f_email" placeholder="example@example.com">
+      </div>
+      <div class="field full">
+        <label>住所</label>
+        <input type="text" id="f_address" placeholder="東京都〇〇区…">
+      </div>
+      <div class="field">
+        <label>名刺交換日</label>
+        <input type="date" id="f_metDate">
+      </div>
+      <div class="field full">
+        <label>メモ</label>
+        <textarea id="f_memo" placeholder="話した内容や紹介経緯など"></textarea>
+      </div>
+      <div class="field full">
+        <label>名刺の写真</label>
+        <div class="photo-row">
+          <label class="file-btn" id="photoLabel">
+            写真を撮る／選ぶ
+            <input type="file" id="f_photoInput" accept="image/*" capture="environment">
+          </label>
+          <button type="button" class="btn-small btn-danger" id="removePhotoBtn" style="display:none;">写真を削除</button>
+        </div>
+        <div id="photoPreviewWrap" style="display:none;">
+          <img id="photoPreview" alt="名刺の写真プレビュー">
+        </div>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn-primary" id="saveBtn">保存する</button>
+      <button id="cancelEditBtn" style="display:none;">編集をキャンセル</button>
+    </div>
+  </section>
+
+  <div class="toolbar">
+    <button id="exportBtn">ファイルに書き出す</button>
+    <label class="file-btn" id="importLabel">
+      ファイルを読み込む
+      <input type="file" id="importInput" accept=".json,application/json">
+    </label>
+    <button class="btn-danger" id="clearBtn">全部消す</button>
+  </div>
+
+  <details class="panel details-panel">
+    <summary>挨拶メールのひな形を編集</summary>
+    <div class="form-grid" style="margin-top:12px;">
+      <div class="field full">
+        <label>差出人名（自分の名前・会社名など）</label>
+        <input type="text" id="tpl_sender" placeholder="株式会社〇〇　山田 太郎">
+      </div>
+      <div class="field full">
+        <label>件名テンプレート</label>
+        <input type="text" id="tpl_subject">
+      </div>
+      <div class="field full">
+        <label>本文テンプレート</label>
+        <textarea id="tpl_body" rows="8"></textarea>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn-primary" id="saveTemplateBtn">ひな形を保存</button>
+    </div>
+    <div class="hint">
+      使える差し込み文字：{name}氏名 {company}会社名 {department}部署 {title}役職 {phone}電話番号 {email}メール {address}住所 {metDate}交換日 {sender}差出人名
+    </div>
+  </details>
+
+  <div class="search-box">
+    <input type="text" id="searchInput" placeholder="氏名・会社名・部署・役職・メモなどで検索">
+  </div>
+
+  <div class="card-list" id="cardList"></div>
+  <div id="lightbox">
+    <img id="lightboxImg" alt="名刺の写真（拡大）">
+  </div>
+
+  <div id="mailModal" class="modal-overlay">
+    <div class="modal-box">
+      <h2>挨拶メール</h2>
+      <div class="field full">
+        <label>件名</label>
+        <input type="text" id="mailSubjectOut">
+      </div>
+      <div class="field full">
+        <label>本文</label>
+        <textarea id="mailBodyOut" rows="10"></textarea>
+      </div>
+      <div class="form-actions">
+        <button class="btn-primary" id="mailGmailBtn">Gmailで開く</button>
+        <button id="mailOpenBtn">他のメールアプリで開く</button>
+        <button id="mailCopyBtn">本文をコピー</button>
+        <button id="mailCloseBtn">閉じる</button>
+      </div>
+      <div class="hint">宛先はカードのメールアドレスが自動で入ります。内容は送る前に自由に編集できます。「Gmailで開く」はブラウザでGmailの作成画面を開きます（要インターネット接続）。「他のメールアプリで開く」はパソコンに設定された既定のメールソフトを起動します。</div>
+    </div>
+  </div>
+  <div class="hint">
+    ・入力内容はこの端末のブラウザ内に自動保存されます（他のサイトやサーバーには送信されません）。<br>
+    ・写真は保存容量を圧迫しないよう自動で縮小・圧縮してから保存されます。<br>
+    ・別の端末（パソコンなど）に移したいときは「ファイルに書き出す」でバックアップファイルを保存し、移動先で「ファイルを読み込む」を使ってください（読み込みは追加されます）。データが増えてきたら、定期的にパソコンへ書き出しておくと安心です。
+  </div>
+</main>
+
+<footer>名刺データは端末のブラウザ内だけに保存されます。ブラウザのデータを消去すると内容も消えるため、大事なデータは定期的に書き出して保存してください。</footer>
+
+<script>
+(function () {
+  var STORAGE_KEY = 'dejiina_meishi_tool_v1';
+  var TEMPLATE_KEY = 'dejiina_meishi_tool_v1_mailtemplate';
+  var cards = [];
+  var editingId = null;
+  var mailTemplate = {
+    sender: 'Chatwork名：明日しよう\n氏名：西川 尚',
+    subject: 'ご挨拶（{company} {name}様）',
+    body: '{company}\n{name} 様\n\n先日は名刺交換をさせていただき、誠にありがとうございました。\n今後ともどうぞよろしくお願いいたします。\n\n{sender}'
+  };
+
+  var status = document.getElementById('status');
+  var cardList = document.getElementById('cardList');
+  var searchInput = document.getElementById('searchInput');
+  var formTitle = document.getElementById('formTitle');
+  var saveBtn = document.getElementById('saveBtn');
+  var cancelEditBtn = document.getElementById('cancelEditBtn');
+  var exportBtn = document.getElementById('exportBtn');
+  var clearBtn = document.getElementById('clearBtn');
+  var importInput = document.getElementById('importInput');
+  var photoInput = document.getElementById('f_photoInput');
+  var removePhotoBtn = document.getElementById('removePhotoBtn');
+  var photoPreviewWrap = document.getElementById('photoPreviewWrap');
+  var photoPreview = document.getElementById('photoPreview');
+  var lightbox = document.getElementById('lightbox');
+  var lightboxImg = document.getElementById('lightboxImg');
+  var tplSender = document.getElementById('tpl_sender');
+  var tplSubject = document.getElementById('tpl_subject');
+  var tplBody = document.getElementById('tpl_body');
+  var saveTemplateBtn = document.getElementById('saveTemplateBtn');
+  var mailModal = document.getElementById('mailModal');
+  var mailSubjectOut = document.getElementById('mailSubjectOut');
+  var mailBodyOut = document.getElementById('mailBodyOut');
+  var mailOpenBtn = document.getElementById('mailOpenBtn');
+  var mailGmailBtn = document.getElementById('mailGmailBtn');
+  var mailCopyBtn = document.getElementById('mailCopyBtn');
+  var mailCloseBtn = document.getElementById('mailCloseBtn');
+  var currentMailCard = null;
+
+  var fields = ['name', 'company', 'department', 'title', 'phone', 'email', 'address', 'metDate', 'memo'];
+  var currentPhotoDataUrl = '';
+
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function formatNow() {
+    var d = new Date();
+    return d.getFullYear() + '/' + pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + ' ' +
+      pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  function setStatus(text) { status.textContent = text; }
+  function newId() { return 'c_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      cards = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(cards)) cards = [];
+      setStatus(cards.length + ' 件の名刺が保存されています');
+    } catch (e) {
+      cards = [];
+      setStatus('この端末ではブラウザ保存が使えないため、内容は保存されません。');
+    }
+  }
+
+  function loadTemplate() {
+    try {
+      var raw = localStorage.getItem(TEMPLATE_KEY);
+      if (raw) {
+        var saved = JSON.parse(raw);
+        mailTemplate.sender = saved.sender || mailTemplate.sender;
+        mailTemplate.subject = saved.subject || mailTemplate.subject;
+        mailTemplate.body = saved.body || mailTemplate.body;
+      }
+    } catch (e) { /* デフォルトのひな形を使う */ }
+    tplSender.value = mailTemplate.sender;
+    tplSubject.value = mailTemplate.subject;
+    tplBody.value = mailTemplate.body;
+  }
+
+  saveTemplateBtn.addEventListener('click', function () {
+    mailTemplate.sender = tplSender.value;
+    mailTemplate.subject = tplSubject.value;
+    mailTemplate.body = tplBody.value;
+    try {
+      localStorage.setItem(TEMPLATE_KEY, JSON.stringify(mailTemplate));
+      setStatus('メールのひな形を保存しました');
+    } catch (e) {
+      setStatus('ひな形の保存に失敗しました。');
+    }
+  });
+
+  function fillTemplate(str, card) {
+    return str.replace(/\{(name|company|department|title|phone|email|address|metDate|sender)\}/g, function (m, key) {
+      if (key === 'sender') return mailTemplate.sender || '';
+      return card[key] || '';
+    });
+  }
+
+  function openMailModal(card) {
+    currentMailCard = card;
+    mailSubjectOut.value = fillTemplate(mailTemplate.subject, card);
+    mailBodyOut.value = fillTemplate(mailTemplate.body, card);
+    mailModal.classList.add('show');
+  }
+
+  function closeMailModal() {
+    mailModal.classList.remove('show');
+    currentMailCard = null;
+  }
+
+  mailCloseBtn.addEventListener('click', closeMailModal);
+  mailModal.addEventListener('click', function (e) {
+    if (e.target === mailModal) closeMailModal();
+  });
+
+  mailCopyBtn.addEventListener('click', function () {
+    mailBodyOut.focus();
+    mailBodyOut.select();
+    mailBodyOut.setSelectionRange(0, 999999);
+    try {
+      document.execCommand('copy');
+      setStatus('本文をコピーしました');
+    } catch (e) {
+      setStatus('コピーに失敗しました。本文を長押しして手動でコピーしてください。');
+    }
+  });
+
+  mailOpenBtn.addEventListener('click', function () {
+    var to = (currentMailCard && currentMailCard.email) ? currentMailCard.email : '';
+    var url = 'mailto:' + encodeURIComponent(to).replace(/%40/g, '@') +
+      '?subject=' + encodeURIComponent(mailSubjectOut.value) +
+      '&body=' + encodeURIComponent(mailBodyOut.value);
+    window.location.href = url;
+  });
+
+  mailGmailBtn.addEventListener('click', function () {
+    var to = (currentMailCard && currentMailCard.email) ? currentMailCard.email : '';
+    var url = 'https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(to) +
+      '&su=' + encodeURIComponent(mailSubjectOut.value) +
+      '&body=' + encodeURIComponent(mailBodyOut.value);
+    window.open(url, '_blank');
+  });
+
+  function persist(message) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cards));
+      setStatus((message || '保存しました') + '　' + formatNow() + '　(全' + cards.length + '件)');
+    } catch (e) {
+      setStatus('保存容量がいっぱいのため保存できませんでした。「ファイルに書き出す」でバックアップし、古いデータやPCに移した名刺を削除してから空き容量を作ってください。');
+    }
+  }
+
+  function getFormValues() {
+    var v = {};
+    fields.forEach(function (f) {
+      v[f] = document.getElementById('f_' + f).value.trim();
+    });
+    return v;
+  }
+
+  function showPhotoPreview(dataUrl) {
+    photoPreview.src = dataUrl;
+    photoPreviewWrap.style.display = 'block';
+    removePhotoBtn.style.display = 'inline-flex';
+  }
+
+  function hidePhotoPreview() {
+    photoPreview.src = '';
+    photoPreviewWrap.style.display = 'none';
+    removePhotoBtn.style.display = 'none';
+  }
+
+  function resizeImage(file, maxDim, quality, callback) {
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var img = new Image();
+      img.onload = function () {
+        var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        var cw = Math.max(1, Math.round(img.width * scale));
+        var ch = Math.max(1, Math.round(img.height * scale));
+        var canvas = document.createElement('canvas');
+        canvas.width = cw;
+        canvas.height = ch;
+        canvas.getContext('2d').drawImage(img, 0, 0, cw, ch);
+        callback(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = function () { callback(null); };
+      img.src = e.target.result;
+    };
+    reader.onerror = function () { callback(null); };
+    reader.readAsDataURL(file);
+  }
+
+  photoInput.addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setStatus('写真を処理しています…');
+    resizeImage(file, 1280, 0.72, function (dataUrl) {
+      if (!dataUrl) {
+        alert('写真の読み込みに失敗しました。');
+        setStatus(cards.length + ' 件の名刺が保存されています');
+        return;
+      }
+      currentPhotoDataUrl = dataUrl;
+      showPhotoPreview(dataUrl);
+      var metDateField = document.getElementById('f_metDate');
+      if (!metDateField.value) {
+        var d = new Date();
+        metDateField.value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+      }
+      setStatus('写真を追加しました（名刺交換日は今日の日付を自動入力。必要であれば手動で変更できます）');
+    });
+  });
+
+  removePhotoBtn.addEventListener('click', function () {
+    currentPhotoDataUrl = '';
+    photoInput.value = '';
+    hidePhotoPreview();
+  });
+
+  cardList.addEventListener('click', function (e) {
+    if (e.target.classList.contains('card-thumb')) {
+      lightboxImg.src = e.target.src;
+      lightbox.classList.add('show');
+    }
+  });
+
+  lightbox.addEventListener('click', function () {
+    lightbox.classList.remove('show');
+    lightboxImg.src = '';
+  });
+
+  function clearForm() {
+    fields.forEach(function (f) { document.getElementById('f_' + f).value = ''; });
+    editingId = null;
+    currentPhotoDataUrl = '';
+    photoInput.value = '';
+    hidePhotoPreview();
+    formTitle.textContent = '新しい名刺を追加';
+    saveBtn.textContent = '保存する';
+    cancelEditBtn.style.display = 'none';
+  }
+
+  function fillForm(card) {
+    fields.forEach(function (f) { document.getElementById('f_' + f).value = card[f] || ''; });
+    editingId = card.id;
+    currentPhotoDataUrl = card.photo || '';
+    photoInput.value = '';
+    if (currentPhotoDataUrl) showPhotoPreview(currentPhotoDataUrl); else hidePhotoPreview();
+    formTitle.textContent = '名刺を編集';
+    saveBtn.textContent = '更新する';
+    cancelEditBtn.style.display = 'inline-flex';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function render() {
+    var keyword = searchInput.value.trim().toLowerCase();
+    var list = cards.slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+    if (keyword) {
+      list = list.filter(function (c) {
+        return fields.some(function (f) { return (c[f] || '').toLowerCase().indexOf(keyword) !== -1; });
+      });
+    }
+    if (list.length === 0) {
+      cardList.innerHTML = '<div class="empty">' + (cards.length === 0 ? 'まだ名刺が登録されていません。上のフォームから追加してください。' : '検索条件に一致する名刺がありません。') + '</div>';
+      return;
+    }
+    cardList.innerHTML = list.map(function (c) {
+      var subParts = [c.company, c.department, c.title].filter(Boolean).join(' / ');
+      var rows = '';
+      if (c.phone) rows += '<div class="card-row"><span class="k">電話</span><span>' + esc(c.phone) + '</span></div>';
+      if (c.email) rows += '<div class="card-row"><span class="k">メール</span><span>' + esc(c.email) + '</span></div>';
+      if (c.address) rows += '<div class="card-row"><span class="k">住所</span><span>' + esc(c.address) + '</span></div>';
+      if (c.metDate) rows += '<div class="card-row"><span class="k">交換日</span><span>' + esc(c.metDate) + '</span></div>';
+      var memo = c.memo ? '<div class="card-memo">' + esc(c.memo) + '</div>' : '';
+      var thumb = c.photo ? '<img class="card-thumb" src="' + c.photo + '" alt="' + esc(c.name || '名刺') + 'の写真">' : '';
+      return '<div class="card" data-id="' + esc(c.id) + '">' +
+        '<div class="card-top">' +
+        thumb +
+        '<div class="card-headtext">' +
+        '<div class="card-name">' + esc(c.name || '（氏名未入力）') + '</div>' +
+        (subParts ? '<div class="card-sub">' + esc(subParts) + '</div>' : '') +
+        '</div></div>' +
+        rows + memo +
+        '<div class="card-actions">' +
+        '<button class="btn-small mail-btn">挨拶メールを作成</button>' +
+        '<button class="btn-small edit-btn">編集</button>' +
+        '<button class="btn-small btn-danger delete-btn">削除</button>' +
+        '</div></div>';
+    }).join('');
+  }
+
+  cardList.addEventListener('click', function (e) {
+    var cardEl = e.target.closest('.card');
+    if (!cardEl) return;
+    var id = cardEl.getAttribute('data-id');
+    var card = cards.find(function (c) { return c.id === id; });
+    if (!card) return;
+    if (e.target.classList.contains('mail-btn')) {
+      openMailModal(card);
+    } else if (e.target.classList.contains('edit-btn')) {
+      fillForm(card);
+    } else if (e.target.classList.contains('delete-btn')) {
+      if (confirm((card.name || 'この名刺') + ' を削除します。よろしいですか？')) {
+        cards = cards.filter(function (c) { return c.id !== id; });
+        if (editingId === id) clearForm();
+        persist('削除しました');
+        render();
+      }
+    }
+  });
+
+  saveBtn.addEventListener('click', function () {
+    var v = getFormValues();
+    v.photo = currentPhotoDataUrl;
+    if (!v.name && !v.company) {
+      alert('氏名または会社名のどちらかは入力してください。');
+      return;
+    }
+    var now = Date.now();
+    if (editingId) {
+      var idx = cards.findIndex(function (c) { return c.id === editingId; });
+      if (idx !== -1) {
+        cards[idx] = Object.assign({}, cards[idx], v, { updatedAt: now });
+      }
+      persist('更新しました');
+    } else {
+      v.id = newId();
+      v.createdAt = now;
+      v.updatedAt = now;
+      cards.push(v);
+      persist('追加しました');
+    }
+    clearForm();
+    render();
+  });
+
+  cancelEditBtn.addEventListener('click', clearForm);
+  searchInput.addEventListener('input', render);
+
+  clearBtn.addEventListener('click', function () {
+    if (cards.length === 0) return;
+    if (!confirm('登録されている名刺データをすべて削除します。よろしいですか？')) return;
+    cards = [];
+    clearForm();
+    persist('全て削除しました');
+    render();
+  });
+
+  exportBtn.addEventListener('click', function () {
+    var d = new Date();
+    var filename = 'meishi_' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) +
+      '_' + pad(d.getHours()) + pad(d.getMinutes()) + '.json';
+    var blob = new Blob([JSON.stringify(cards, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    setStatus('ファイルに書き出しました：' + filename);
+  });
+
+  importInput.addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (ev) {
+      try {
+        var data = JSON.parse(ev.target.result);
+        if (!Array.isArray(data)) throw new Error('形式が正しくありません');
+        var count = data.length;
+        if (!confirm(count + ' 件の名刺データを読み込みます。現在のデータに追加されます。よろしいですか？')) return;
+        data.forEach(function (item) {
+          var now = Date.now();
+          cards.push({
+            id: newId(),
+            name: item.name || '',
+            company: item.company || '',
+            department: item.department || '',
+            title: item.title || '',
+            phone: item.phone || '',
+            email: item.email || '',
+            address: item.address || '',
+            metDate: item.metDate || '',
+            memo: item.memo || '',
+            photo: item.photo || '',
+            createdAt: item.createdAt || now,
+            updatedAt: now
+          });
+        });
+        persist('読み込みました（' + count + '件追加）');
+        render();
+      } catch (err) {
+        alert('ファイルの読み込みに失敗しました。正しいバックアップファイルか確認してください。');
+      }
+    };
+    reader.onerror = function () { alert('ファイルの読み込みに失敗しました。'); };
+    reader.readAsText(file, 'utf-8');
+    importInput.value = '';
+  });
+
+  load();
+  loadTemplate();
+  render();
+})();
+</script>
+</body>
+</html>
