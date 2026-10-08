@@ -189,6 +189,40 @@
     border: 1px solid var(--border);
     display: block;
   }
+  #cornerStage {
+    position: relative;
+    margin: 0 auto;
+    line-height: 0;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #cornerImg { width: 100%; display: block; border-radius: 6px; -webkit-user-drag: none; pointer-events: none; }
+  #cornerSvg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #cornerPoly { fill: rgba(194, 136, 63, 0.18); stroke: #ff5a1f; stroke-width: 3; vector-effect: non-scaling-stroke; }
+  .corner-handle {
+    position: absolute;
+    width: 52px;
+    height: 52px;
+    margin: -26px 0 0 -26px;
+    border-radius: 50%;
+    border: 3px solid #ff5a1f;
+    background: rgba(255, 255, 255, 0.25);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+    touch-action: none;
+    cursor: grab;
+  }
+  .corner-handle::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    margin: -3px 0 0 -3px;
+    border-radius: 50%;
+    background: #ff5a1f;
+  }
   .ocr-lines { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
   .ocr-line {
     border: 1px solid var(--border);
@@ -309,6 +343,7 @@
           <img id="photoPreview" alt="名刺の写真プレビュー">
           <div class="photo-row" style="margin-top:8px;">
             <button type="button" class="btn-primary" id="ocrBtn">写真から自動読み取り（OCR）</button>
+            <button type="button" id="cornerBtn">四隅を合わせて補正（斜めに写ったとき）</button>
           </div>
           <div id="ocrResultWrap" style="display:none;">
             <div class="hint" id="ocrResultHint"></div>
@@ -432,6 +467,25 @@
         <button id="myCardCloseBtn">閉じる</button>
       </div>
       <div class="hint" style="text-align:left;">相手のスマホのカメラでこのQRコードを読み取ってもらうと、公開用の電子名刺ページが開きます。公開されるのは電子名刺ページの内容だけで、この端末に保存した名刺データ・写真・メモは含まれません。</div>
+    </div>
+  </div>
+
+  <div id="cornerModal" class="modal-overlay">
+    <div class="modal-box" style="max-width:640px;">
+      <h2>名刺の四隅を合わせる</h2>
+      <div class="hint" style="margin:0 0 10px;">4つの丸を名刺の角まで動かしてください（丸の中心が角に重なるように）。名刺だけを切り出し、正面から見た形に直します。</div>
+      <div id="cornerStage">
+        <img id="cornerImg" alt="補正する名刺の写真">
+        <svg id="cornerSvg" viewBox="0 0 1000 1000" preserveAspectRatio="none"><polygon id="cornerPoly"></polygon></svg>
+        <div class="corner-handle" data-i="0"></div>
+        <div class="corner-handle" data-i="1"></div>
+        <div class="corner-handle" data-i="2"></div>
+        <div class="corner-handle" data-i="3"></div>
+      </div>
+      <div class="form-actions">
+        <button class="btn-primary btn-big" id="cornerApplyBtn">この形で補正する</button>
+        <button id="cornerCancelBtn" style="flex:1 1 100%; justify-content:center;">キャンセル</button>
+      </div>
     </div>
   </div>
 
@@ -1609,6 +1663,128 @@
     setStatus('候補を入力しました。名刺と見比べて確認してください');
   });
 
+  // ---- 四隅を合わせる台形補正（斜めに撮れた名刺を、正面から見た形に直す） ----
+  var cornerModal = document.getElementById('cornerModal');
+  var cornerStage = document.getElementById('cornerStage');
+  var cornerImg = document.getElementById('cornerImg');
+  var cornerPoly = document.getElementById('cornerPoly');
+  var cornerHandles = Array.prototype.slice.call(cornerStage.querySelectorAll('.corner-handle'));
+  // 左上・右上・右下・左下の順。値は写真に対する割合（0〜1）
+  var cornerQuad = [];
+  var cornerActive = -1;
+
+  function layoutCorners() {
+    cornerHandles.forEach(function (h, i) {
+      h.style.left = (cornerQuad[i][0] * 100) + '%';
+      h.style.top = (cornerQuad[i][1] * 100) + '%';
+    });
+    cornerPoly.setAttribute('points', cornerQuad.map(function (pt) { return (pt[0] * 1000) + ',' + (pt[1] * 1000); }).join(' '));
+  }
+
+  document.getElementById('cornerBtn').addEventListener('click', function () {
+    if (!currentPhotoDataUrl) return;
+    cornerQuad = [[0.12, 0.12], [0.88, 0.12], [0.88, 0.88], [0.12, 0.88]];
+    cornerImg.onload = function () {
+      // 写真全体が画面に収まるよう、縦長の写真では幅を絞る
+      cornerStage.style.maxWidth = Math.round(window.innerHeight * 0.55 * cornerImg.naturalWidth / cornerImg.naturalHeight) + 'px';
+      layoutCorners();
+    };
+    cornerImg.src = currentPhotoDataUrl;
+    cornerModal.classList.add('show');
+  });
+
+  cornerHandles.forEach(function (h, i) {
+    h.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      cornerActive = i;
+      try { h.setPointerCapture(e.pointerId); } catch (err) { /* 対応していない環境ではそのまま動かす */ }
+    });
+  });
+  cornerStage.addEventListener('pointermove', function (e) {
+    if (cornerActive < 0) return;
+    e.preventDefault();
+    var box = cornerStage.getBoundingClientRect();
+    cornerQuad[cornerActive] = [
+      Math.min(1, Math.max(0, (e.clientX - box.left) / box.width)),
+      Math.min(1, Math.max(0, (e.clientY - box.top) / box.height))
+    ];
+    layoutCorners();
+  });
+  ['pointerup', 'pointercancel'].forEach(function (type) {
+    cornerStage.addEventListener(type, function () { cornerActive = -1; });
+  });
+  document.getElementById('cornerCancelBtn').addEventListener('click', function () { cornerModal.classList.remove('show'); });
+
+  // src の4点 pts（左上・右上・右下・左下、px）で囲まれた部分を、幅 w・高さ h の長方形に引き伸ばす
+  function warpQuad(src, pts, w, h) {
+    var sw = src.width, sh = src.height;
+    var sdata = src.getContext('2d').getImageData(0, 0, sw, sh).data;
+    var out = document.createElement('canvas');
+    out.width = w;
+    out.height = h;
+    var octx = out.getContext('2d');
+    var oimg = octx.createImageData(w, h);
+    var odata = oimg.data;
+    var x0 = pts[0][0], y0 = pts[0][1], x1 = pts[1][0], y1 = pts[1][1];
+    var x2 = pts[2][0], y2 = pts[2][1], x3 = pts[3][0], y3 = pts[3][1];
+    var dx1 = x1 - x2, dx2 = x3 - x2, sx = x0 - x1 + x2 - x3;
+    var dy1 = y1 - y2, dy2 = y3 - y2, sy = y0 - y1 + y2 - y3;
+    var den = dx1 * dy2 - dx2 * dy1;
+    var g = den ? (sx * dy2 - dx2 * sy) / den : 0;
+    var k = den ? (dx1 * sy - sx * dy1) / den : 0;
+    var a = x1 - x0 + g * x1, b = x3 - x0 + k * x3, c = x0;
+    var d = y1 - y0 + g * y1, e = y3 - y0 + k * y3, f = y0;
+    for (var oy = 0; oy < h; oy++) {
+      var v = (oy + 0.5) / h;
+      for (var ox = 0; ox < w; ox++) {
+        var u = (ox + 0.5) / w;
+        var q = g * u + k * v + 1;
+        var fx = (a * u + b * v + c) / q - 0.5, fy = (d * u + e * v + f) / q - 0.5;
+        var ix = Math.floor(fx), iy = Math.floor(fy);
+        var o = (oy * w + ox) * 4;
+        if (ix < 0 || iy < 0 || ix >= sw - 1 || iy >= sh - 1) {
+          odata[o] = odata[o + 1] = odata[o + 2] = 255;
+          odata[o + 3] = 255;
+          continue;
+        }
+        // 周囲4画素をなめらかに混ぜる
+        var tx = fx - ix, ty = fy - iy;
+        var i00 = (iy * sw + ix) * 4, i10 = i00 + 4, i01 = i00 + sw * 4, i11 = i01 + 4;
+        var w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty), w01 = (1 - tx) * ty, w11 = tx * ty;
+        odata[o] = sdata[i00] * w00 + sdata[i10] * w10 + sdata[i01] * w01 + sdata[i11] * w11;
+        odata[o + 1] = sdata[i00 + 1] * w00 + sdata[i10 + 1] * w10 + sdata[i01 + 1] * w01 + sdata[i11 + 1] * w11;
+        odata[o + 2] = sdata[i00 + 2] * w00 + sdata[i10 + 2] * w10 + sdata[i01 + 2] * w01 + sdata[i11 + 2] * w11;
+        odata[o + 3] = 255;
+      }
+    }
+    octx.putImageData(oimg, 0, 0);
+    return out;
+  }
+
+  document.getElementById('cornerApplyBtn').addEventListener('click', function () {
+    var applyBtn = document.getElementById('cornerApplyBtn');
+    applyBtn.disabled = true;
+    loadOcrSource().then(function (img) {
+      // 端末のメモリに収まる大きさ（長辺3600pxまで）に抑えてから変形する
+      var base = drawRegion(img, { x: 0, y: 0, w: 1, h: 1 }, Math.min(3600, Math.max(img.width, img.height)), 1, 0, 0);
+      var pts = cornerQuad.map(function (pt) { return [pt[0] * base.width, pt[1] * base.height]; });
+      function dist(p, q) { return Math.sqrt((p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1])); }
+      var outW = Math.max(dist(pts[0], pts[1]), dist(pts[3], pts[2]));
+      var outH = Math.max(dist(pts[0], pts[3]), dist(pts[1], pts[2]));
+      if (outW < 40 || outH < 40) throw new Error('範囲が小さすぎます');
+      var scale = Math.min(1, 2400 / Math.max(outW, outH));
+      var flat = warpQuad(base, pts, Math.round(outW * scale), Math.round(outH * scale));
+      ocrSourceImage = flat;
+      currentPhotoDataUrl = drawResized(flat, 1280, 0.72);
+      showPhotoPreview(currentPhotoDataUrl);
+      cornerModal.classList.remove('show');
+      setStatus('名刺の形を補正しました。「写真から自動読み取り」を押してください');
+    }).catch(function (err) {
+      console.error(err);
+      alert('補正できませんでした。四隅の位置を確認してもう一度お試しください。');
+    }).then(function () { applyBtn.disabled = false; });
+  });
+
   // 上下逆や横向きで撮った写真を、読めた向きに合わせて保存用の写真も直す
   function uprightPhoto(quarter) {
     var source = currentPhotoDataUrl;
@@ -1643,14 +1819,19 @@
       var labels = { company: '会社名', name: '氏名', department: '部署', title: '役職', email: 'メールアドレス', phone: '電話番号', address: '住所' };
       var filled = [];
       var missing = [];
+      var kept = [];
       Object.keys(labels).forEach(function (f) {
         var input = document.getElementById('f_' + f);
-        if (parsed[f] && !input.value) {
+        // 手で入力・修正した項目は触らない。空欄と、前回の自動入力のままの項目だけ入れる
+        var replaceable = !input.value || input.classList.contains('needs-check');
+        if (parsed[f] && replaceable) {
           input.value = parsed[f];
           input.classList.add('needs-check');
           filled.push(labels[f]);
         } else if (!input.value && f !== 'department') {
           missing.push(labels[f]);
+        } else if (input.value) {
+          kept.push(labels[f]);
         }
       });
 
@@ -1658,11 +1839,14 @@
       showOcrCandidates(parsed);
       ocrResultWrap.style.display = 'block';
       ocrLinesDetails.open = false;
-      var hint = filled.length ? ('自動入力しました（色枠の項目）: ' + filled.join('・') + '。必ず名刺と見比べて確認してください。') : '自動入力できる項目は見つかりませんでした。';
+      var hint = filled.length ? ('自動入力しました（色枠の項目）: ' + filled.join('・') + '。必ず名刺と見比べて確認してください。')
+        : (kept.length ? '新しく自動入力した項目はありません。' : '自動入力できる項目は見つかりませんでした。');
+      if (kept.length) hint += ' 入力済みの項目はそのままにしました: ' + kept.join('・') + '。';
       if (missing.length) hint += ' 判別できなかった項目: ' + missing.join('・') + '（空欄のままです。手入力するか、下の「読み取った行」から割り当ててください）。';
       if (parsed.nameCandidates.length > 1 && !parsed.name) hint += ' 氏名の候補が複数あったため、氏名は自動入力していません。';
       if (parsed.emailCandidates.length) hint += ' メールアドレスは読み取るたびに結果が分かれたため、自動入力していません。下の候補を名刺と見比べて選ぶか、手入力してください。';
       if (parsed.quarter) hint += ' 写真の向きを自動で直して読み取りました。';
+      if (missing.length >= 2 || parsed.emailCandidates.length) hint += ' 名刺が斜めに写っている場合は「四隅を合わせて補正」を使ってから読み取り直すと、読み取りやすくなります。';
       ocrResultHint.textContent = hint;
       setStatus(filled.length ? (filled.join('・') + 'を自動入力しました。内容を確認してください') : '文字は読み取れましたが、自動入力できる項目はありませんでした');
     }).catch(function (err) {
@@ -1969,7 +2153,7 @@
   });
 
   // 動作確認用（読み取りロジックだけを外から試せるようにしている）
-  window.meishiDebug = { parseCardText: parseCardText, parseCardLines: parseCardLines };
+  window.meishiDebug = { parseCardText: parseCardText, parseCardLines: parseCardLines, warpQuad: warpQuad };
 
   loadTemplate();
   init().then(function () {
