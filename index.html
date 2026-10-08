@@ -88,7 +88,7 @@
     outline: none;
   }
   input:focus, textarea:focus { border-color: var(--accent); }
-  input.needs-check { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(194, 136, 63, 0.25); }
+  input.needs-check { border-color: var(--danger); box-shadow: 0 0 0 2px rgba(211, 84, 58, 0.22); }
   textarea { resize: vertical; min-height: 60px; line-height: 1.6; }
   .form-actions {
     display: flex;
@@ -372,8 +372,12 @@
         <input type="text" id="f_title" placeholder="部長">
       </div>
       <div class="field">
-        <label>電話番号</label>
+        <label>電話番号（固定電話）</label>
         <input type="tel" id="f_phone" placeholder="03-1234-5678">
+      </div>
+      <div class="field">
+        <label>携帯電話番号</label>
+        <input type="tel" id="f_mobile" placeholder="090-1234-5678">
       </div>
       <div class="field">
         <label>メールアドレス</label>
@@ -438,7 +442,7 @@
       <button id="resetTemplateBtn">初期のひな形に戻す</button>
     </div>
     <div class="hint">
-      使える差し込み文字：{name}氏名 {company}会社名 {department}部署 {title}役職 {phone}電話番号 {email}メール {address}住所 {metDate}交換日 {metDateJp}交換日（〇月〇日） {eventName}交流会名 {memo}会話メモ {myName}自分の名前 {sender}署名<br>
+      使える差し込み文字：{name}氏名 {company}会社名 {department}部署 {title}役職 {phone}電話番号 {mobile}携帯電話番号 {email}メール {address}住所 {metDate}交換日 {metDateJp}交換日（〇月〇日） {eventName}交流会名 {memo}会話メモ {myName}自分の名前 {sender}署名<br>
       {salutation}＝「氏名 様」（氏名が空なら「ご担当者様」）　{occasion}＝交換日と交流会名から作る書き出し（例：「10月9日の「〇〇交流会」では、」。どちらも空なら「先日は、」）<br>
       [[ ]] で囲んだ部分は、中の差し込み文字が空欄のとき丸ごと省略されます（例：[[{company}の皆様]]）。
     </div>
@@ -623,7 +627,7 @@
   var mailCloseBtn = document.getElementById('mailCloseBtn');
   var currentMailCard = null;
 
-  var fields = ['name', 'company', 'department', 'title', 'phone', 'email', 'address', 'metDate', 'eventName', 'memo'];
+  var fields = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address', 'metDate', 'eventName', 'memo'];
   var currentPhotoDataUrl = '';
   var ocrSourceImage = null;
   // 補正・回転する前の写真。補正後の写真（currentPhotoDataUrl）とは別に残す
@@ -810,7 +814,7 @@
     return card[key] || '';
   }
 
-  var TOKEN_RE = /\{(name|company|department|title|phone|email|address|metDate|metDateJp|eventName|memo|myName|sender|salutation|occasion)\}/g;
+  var TOKEN_RE = /\{(name|company|department|title|phone|mobile|email|address|metDate|metDateJp|eventName|memo|myName|sender|salutation|occasion)\}/g;
 
   function fillTemplate(str, card) {
     // [[ ]] の中の差し込み文字がひとつでも空なら、その部分を丸ごと省く
@@ -980,11 +984,11 @@
 
   // 手で直した項目は確認済みとして色枠を外す
   fields.forEach(function (f) {
-    document.getElementById('f_' + f).addEventListener('input', function (e) { e.target.classList.remove('needs-check'); });
+    document.getElementById('f_' + f).addEventListener('input', function (e) { e.target.classList.remove('needs-check', 'ocr-filled'); });
   });
 
   function clearNeedsCheck() {
-    fields.forEach(function (f) { document.getElementById('f_' + f).classList.remove('needs-check'); });
+    fields.forEach(function (f) { document.getElementById('f_' + f).classList.remove('needs-check', 'ocr-filled'); });
   }
 
   function resetOcrResult() {
@@ -1117,25 +1121,30 @@
     return '';
   }
 
-  function extractPhone(lines) {
+  function extractPhones(lines) {
     var re = /(?:\+81[-\s]?\d{1,4}|\(?0\d{1,4}\)?)[-\s(]*\d{1,4}[-\s)]*\d{3,4}/g;
-    var labeled = '';
-    var plain = '';
+    var out = { phone: '', mobile: '' };
     lines.forEach(function (line) {
       if (hasEmail(line) || /https?:|www\./i.test(line)) return;
-      // FAX番号を電話番号として拾わない
-      var seg = line.replace(/(FAX|F\s*A\s*X|ファ[ッツ]?クス)[\s\S]*$/i, '');
-      var found = seg.match(re) || [];
-      found.forEach(function (raw) {
+      var last = 0, m;
+      re.lastIndex = 0;
+      while ((m = re.exec(line))) {
+        // この番号の直前に書かれている見出し
+        var label = line.slice(last, m.index);
+        last = m.index + m[0].length;
+        var raw = m[0];
         var digits = raw.replace(/\D/g, '');
         var ok = raw.charAt(0) === '+' ? (digits.length >= 11 && digits.length <= 12) : (digits.length === 10 || digits.length === 11);
-        if (!ok) return;
+        // FAX番号は電話番号として拾わない
+        if (!ok || /(FAX|F\s*A\s*X|ファ[ッツ]?クス)\s*[.:：]?\s*$/i.test(label)) continue;
         var value = raw.replace(/[()\s]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-        if (!labeled && /(TEL|Tel|電話|携帯|Mobile|MOBILE|Phone|直通)/.test(seg)) labeled = value;
-        if (!plain) plain = value;
-      });
+        var national = raw.charAt(0) === '+' ? '0' + digits.slice(2) : digits;
+        var isMobile = /^0[789]0/.test(national) || /(携帯|Mobile|MOBILE|mobile|Cell|CELL)\s*[.:：]?\s*$/.test(label);
+        if (isMobile) { if (!out.mobile) out.mobile = value; }
+        else if (!out.phone) out.phone = value;
+      }
     });
-    return labeled || plain;
+    return out;
   }
 
   var JA_FORM_RE = /(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|NPO法人|特定非営利活動法人|社会福祉法人|医療法人|学校法人|税理士法人|弁護士法人|司法書士法人|行政書士法人|社会保険労務士法人)/;
@@ -1163,20 +1172,36 @@
   }
 
   function extractAddress(lines) {
-    var addrRe = /[一-鿿]{2,}[都道府県市区郡][一-鿿぀-ヿA-Za-z0-9\-. ]*\d[\d\-.]*(?:[F階号]|号室)?/;
+    var addrRe = /[\u4e00-\u9fff]{2,}[都道府県市区郡][\u4e00-\u9fff\u3040-\u30ffA-Za-z0-9\-. ]*/;
+    var stopRe = /(TEL|FAX|電話|携帯|Mobile|E-?mail|URL|https?:|www\.)/i;
     var pendingPostal = '';
     var best = '';
     for (var i = 0; i < lines.length; i++) {
       var tidy = squeezeJa(lines[i]);
       if (hasEmail(tidy)) continue;
-      var alone = /^(?:〒|T|干)?\s*(\d{3}-\d{4})$/.exec(tidy);
+      // 郵便番号だけの行（〒の記号は別の文字に読まれることがある）
+      var alone = /^\D{0,2}(\d{3}-\d{4})$/.exec(tidy);
       if (alone) { pendingPostal = alone[1]; continue; }
       var m = addrRe.exec(tidy);
       if (!m) continue;
       var pm = /(\d{3}-\d{4})\D*$/.exec(tidy.slice(0, m.index));
       var postal = pm ? pm[1] : pendingPostal;
+      // 住所は行の終わりまで（電話などの見出しが続く場合はその手前まで）を取る
+      var rest = tidy.slice(m.index);
+      var stop = stopRe.exec(rest);
+      var addr = stop ? rest.slice(0, stop.index) : rest;
+      // 番地だけが次の行に分かれている場合はつなげる
+      var next = lines[i + 1] ? squeezeJa(lines[i + 1]) : '';
+      if (!/\d/.test(addr) && /^\d[\d\-.]*(\s|$)/.test(next) && !/^\d{3}-\d{4}$/.test(next) && !/\d{2,4}-\d{2,4}-\d{3,4}/.test(next)) {
+        addr += next.split(stop ? /$^/ : stopRe)[0];
+      }
+      if (!/\d/.test(addr)) continue;
+      // 番地の後ろは、建物名らしい3文字以上のまとまりだけ残し、1〜2文字の読み違いは落とす
+      var tail = /^([\s\S]*\d[\d\-.]*(?:[F階号]|号室)?)([\s\S]*)$/.exec(addr);
+      var extra = tail[2].trim();
+      addr = tail[1] + (extra.replace(/\s+/g, '').length >= 3 ? ' ' + extra : '');
       // 番地の区切りを点と読み違えることがあるので、数字の間の点はハイフンに直す
-      var addr = m[0].replace(/(\d)\.(?=\d)/g, '$1-').replace(/\s+(?=\d)/g, '').replace(/\s+/g, ' ').trim();
+      addr = addr.replace(/(\d)\.(?=\d)/g, '$1-').replace(/\s+(?=\d)/g, '').replace(/\s+/g, ' ').trim();
       var value = (postal ? '〒' + postal + ' ' : '') + addr;
       // 読み方によって途中で切れることがあるので、いちばん長く読めたものを使う
       if (value.length > best.length) best = value;
@@ -1203,10 +1228,13 @@
     var out = {
       name: '', company: '', department: '', title: '',
       email: extractEmail(extra.concat(readable)),
-      phone: extractPhone(readable.concat(extra)),
+      phone: '', mobile: '',
       address: extractAddress(readable.concat(extra)),
       lines: rows.filter(function (r) { return r.conf >= 50 && isMeaningful(r.tidy); }).map(function (r) { return r.tidy; })
     };
+    var phones = extractPhones(readable.concat(extra));
+    out.phone = phones.phone;
+    out.mobile = phones.mobile;
     var nameCandidates = [];
     var tradeName = '';
 
@@ -1522,11 +1550,21 @@
       if (!line && l.bbox && l.confidence >= 30 && (l.text || '').indexOf('@') !== -1) line = l;
     });
     if (!line) return Promise.resolve('');
-    var b = line.bbox;
-    var pad = Math.round((b.y1 - b.y0) * 0.3);
-    var sx = Math.max(0, b.x0 - pad), sy = Math.max(0, b.y0 - pad);
-    var sw = Math.min(canvas.width, b.x1 + pad) - sx, sh = Math.min(canvas.height, b.y1 + pad) - sy;
-    var scale = Math.max(0.5, Math.min(3, 48 / Math.max(1, b.y1 - b.y0)));
+    var b = { x0: line.bbox.x0, y0: line.bbox.y0, x1: line.bbox.x1, y1: line.bbox.y1 };
+    var height = b.y1 - b.y0;
+    // アドレスが途中で別の行として切れていることがあるので、同じ高さですぐ隣にある英数字の切れ端はつなげる
+    lines.forEach(function (l) {
+      if (l === line || !l.bbox || !/^[A-Za-z0-9._\-+\s]+$/.test(l.text || '')) return;
+      var mid = (l.bbox.y0 + l.bbox.y1) / 2;
+      if (mid < b.y0 || mid > b.y1) return;
+      if (l.bbox.x1 <= b.x0 && b.x0 - l.bbox.x1 < height * 2) b.x0 = l.bbox.x0;
+      if (l.bbox.x0 >= b.x1 && l.bbox.x0 - b.x1 < height * 2) b.x1 = l.bbox.x1;
+    });
+    var pad = Math.round(height * 0.3);
+    var side = Math.round(height * 0.8);
+    var sx = Math.max(0, b.x0 - side), sy = Math.max(0, b.y0 - pad);
+    var sw = Math.min(canvas.width, b.x1 + side) - sx, sh = Math.min(canvas.height, b.y1 + pad) - sy;
+    var scale = Math.max(0.5, Math.min(3, 48 / Math.max(1, height)));
     var margin = 20;
     var strip = document.createElement('canvas');
     strip.width = Math.round(sw * scale) + margin * 2;
@@ -1617,12 +1655,12 @@
     var rects = [];
     for (var start = 0; start < gw * gh; start++) {
       if (busy[start] !== 1) continue;
-      var stack = [start], count = 0, minX = gw, minY = gh, maxX = 0, maxY = 0;
+      var stack = [start], members = [], minX = gw, minY = gh, maxX = 0, maxY = 0;
       busy[start] = 2;
       while (stack.length) {
         var c = stack.pop();
         var cx = c % gw, cy = (c - cx) / gw;
-        count++;
+        members.push([cx, cy]);
         if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
         if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
         [[cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1]].forEach(function (n) {
@@ -1633,8 +1671,11 @@
       }
       var bw = maxX - minX + 1, bh = maxY - minY + 1;
       // 芯は外周1マス分だけ小さくなっているので、その分を足して大きさを見る
-      if ((bw + 2) * cell >= lineHeight * 4 && (bh + 2) * cell >= lineHeight * 4 && count >= bw * bh * 0.55) {
-        rects.push({ x: (minX - 1.5) * cell / W, y: (minY - 1.5) * cell / H, w: (bw + 3) * cell / W, h: (bh + 3) * cell / H });
+      if ((bw + 2) * cell >= lineHeight * 4 && (bh + 2) * cell >= lineHeight * 4 && members.length >= bw * bh * 0.55) {
+        // 芯のマスとその周り1マスだけを消す。外枠の矩形で消すと、すぐ隣の文字（氏名の最後の1文字など）まで消えてしまう
+        members.forEach(function (mcell) {
+          rects.push({ x: (mcell[0] - 1) * cell / W, y: (mcell[1] - 1) * cell / H, w: 3 * cell / W, h: 3 * cell / H });
+        });
       }
     }
     return rects;
@@ -1658,7 +1699,7 @@
   // 同じ項目を、前処理の違う画像ごとに読んだ結果を突き合わせる。readings は { value, source } の並び。
   // 別々の画像（source）2つ以上で読めて、読めた結果がすべて同じだったものだけを確定する。同じ画像を読み方だけ変えた
   // 結果どうしの一致は、同じ読み違いを繰り返しやすいので数えない。それ以外は確定せず、読めた結果を候補として返す（多く読めた順）
-  function voteReadings(readings) {
+  function voteReadings(readings, mergeTruncated) {
     var groups = [];
     readings.forEach(function (r) {
       if (!r.value) return;
@@ -1667,13 +1708,27 @@
       if (!hit) { hit = { key: key, value: r.value, sources: [] }; groups.push(hit); }
       if (hit.sources.indexOf(r.source) === -1) hit.sources.push(r.source);
     });
+    if (mergeTruncated) {
+      // 先頭や末尾の数文字が欠けただけの読み（arcly4@… に対する cly4@…）は、長い方と同じ読みとして数える。
+      // 長い方の文字も実際に読み取れたものなので、画像にない文字を足すことにはならない
+      groups.sort(function (p, q) { return q.key.length - p.key.length; });
+      groups = groups.filter(function (g, i) {
+        var longer = groups.slice(0, i).filter(function (o) {
+          return o.key.length - g.key.length <= 4 && (o.key.indexOf(g.key) === 0 || o.key.lastIndexOf(g.key) === o.key.length - g.key.length);
+        })[0];
+        if (!longer) return true;
+        g.sources.forEach(function (src) { if (longer.sources.indexOf(src) === -1) longer.sources.push(src); });
+        return false;
+      });
+    }
     // 食い違う読み方が1つでもあれば確定しない（2対1の多数決でも、多い側が読み違いのことがあった）
     if (groups.length === 1 && groups[0].sources.length >= 2) return { value: groups[0].value, candidates: [] };
     groups.sort(function (p, q) { return q.sources.length - p.sources.length; });
-    return { value: '', candidates: groups.slice(0, 4).map(function (g) { return g.value; }) };
+    return { value: '', candidates: groups.slice(0, 3).map(function (g) { return g.value; }) };
   }
 
-  var OCR_FIELDS = ['name', 'company', 'department', 'title', 'phone', 'email', 'address'];
+  var OCR_FIELDS = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address'];
+  var OCR_LABELS = { name: '氏名', company: '会社名', department: '部署', title: '役職', phone: '電話番号', mobile: '携帯電話番号', email: 'メールアドレス', address: '住所' };
 
   // 傾きと向きを合わせて全体を読み、文字のある範囲だけを大きく写して、前処理を変えながら読み直す
   function readCard(img) {
@@ -1681,7 +1736,7 @@
     var source = img;
     var quarter = 0;
     var passes = [];
-    var sharp;
+    var shots = [];
 
     function readClose(whole, region) {
       var firstScale = Math.max(whole.width, whole.height) / Math.max(source.width, source.height);
@@ -1695,23 +1750,25 @@
         return region.lineHeight * canvas.width / (region.w * whole.width);
       }
       function keep(lines) { passes.push(lines); }
+      var sharp, soft, bold;
 
-      // 1・2回目：白黒にした画像を、散らばった文字向けと行のつながり重視の2通りで読む
+      // 1回目：白黒にした画像を読む
       sharp = binarizeCanvas(shot(34, 2600));
       var graphics = findGraphics(sharp, lineHeightOn(sharp));
       maskRects(sharp, graphics);
-      return recognize(sharp, '11', '(2/5)').then(keep).then(function () {
-        return recognize(sharp, '4', '(3/5)');
-      }).then(keep).then(function () {
-        // 3回目：濃淡を残したまま影をならし、少し大きめに写して読む
-        var soft = shot(44, 2800);
+      shots.push(sharp);
+      return recognize(sharp, '11', '(2/4)').then(keep).then(function () {
+        // 2回目：濃淡を残したまま影をならし、少し大きめに写して読む
+        soft = shot(44, 2800);
+        shots.push(soft);
         flattenCanvas(soft, 0.35, 0.6, Math.max(16, Math.round(lineHeightOn(soft) * 1.4)));
-        return recognize(maskRects(soft, graphics), '11', '(4/5)');
+        return recognize(maskRects(soft, graphics), '11', '(3/4)');
       }).then(keep).then(function () {
-        // 4回目：さらに大きく、コントラストを強めて読む（細い文字・小さい文字向け）
-        var bold = shot(56, 3000);
+        // 3回目：さらに大きく、コントラストを強めて読む（細い文字・小さい文字向け）
+        bold = shot(56, 3000);
+        shots.push(bold);
         flattenCanvas(bold, 0.55, 0.3, Math.max(16, Math.round(lineHeightOn(bold) * 1.4)));
-        return recognize(maskRects(bold, graphics), '11', '(5/5)');
+        return recognize(maskRects(bold, graphics), '11', '(4/4)');
       }).then(keep);
     }
 
@@ -1725,16 +1782,20 @@
       quarter = found.quarter;
       return readClose(found.canvas, findTextRegion(found.lines, found.canvas.width, found.canvas.height));
     }).then(function () {
-      return rereadEmailLine(sharp, passes[0].concat(passes[1]));
-    }).then(function (rereadEmail) {
+      // メールの行は、3種類の画像それぞれで読み直す
+      var rereads = [];
+      return passes.reduce(function (chain, lines, i) {
+        return chain.then(function () { return rereadEmailLine(shots[i], lines); }).then(function (email) { rereads.push(email); });
+      }, Promise.resolve()).then(function () { return rereads; });
+    }).then(function (rereads) {
       var parses = passes.map(function (lines) { return parseCardLines(toItems(lines)); });
       var result = { candidates: {}, quarter: quarter, lines: [] };
       OCR_FIELDS.forEach(function (f) {
-        // 1・2回目とメールの読み直しは同じ白黒画像、3回目・4回目はそれぞれ別の画像
-        var sources = ['sharp', 'sharp', 'soft', 'bold'];
+        var sources = ['sharp', 'soft', 'bold'];
         var readings = parses.map(function (parsed, i) { return { value: parsed[f], source: sources[i] }; });
-        if (f === 'email') readings.push({ value: rereadEmail, source: 'sharp' });
-        var decided = voteReadings(readings);
+        // メールは、同じ画像の読み直し結果も同じ source の読みとして加える
+        if (f === 'email') rereads.forEach(function (email, i) { readings.push({ value: email, source: sources[i] }); });
+        var decided = voteReadings(readings, f === 'email');
         result[f] = decided.value;
         if (decided.candidates.length) result.candidates[f] = decided.candidates;
       });
@@ -1750,7 +1811,7 @@
 
   var ASSIGN_TARGETS = [
     ['name', '氏名'], ['company', '会社名'], ['department', '部署'], ['title', '役職'],
-    ['phone', '電話'], ['email', 'メール'], ['address', '住所'], ['memo', 'メモに追記']
+    ['phone', '電話'], ['mobile', '携帯'], ['email', 'メール'], ['address', '住所'], ['memo', 'メモに追記']
   ];
 
   function showOcrLines(lines) {
@@ -1772,16 +1833,15 @@
       input.value = input.value ? (input.value.replace(/\s+$/, '') + '\n' + text) : text;
     } else {
       input.value = text;
-      input.classList.remove('needs-check');
+      input.classList.remove('needs-check', 'ocr-filled');
     }
     setStatus('「' + text + '」を' + e.target.textContent + 'に入れました');
   });
 
   // 読み方が分かれた項目は自動で入れず、候補として並べて選んでもらう
   function showOcrCandidates(parsed) {
-    var labels = { name: '氏名', company: '会社名', department: '部署', title: '役職', phone: '電話番号', email: 'メールアドレス', address: '住所' };
     ocrCandidates.innerHTML = OCR_FIELDS.filter(function (f) { return parsed.candidates[f]; }).map(function (f) {
-      return '<div class="ocr-line"><div class="ocr-line-text">' + labels[f] + 'の候補（名刺と見比べて、合うものをタップ。入力後に手で直せます）</div><div class="ocr-assign">' +
+      return '<div class="ocr-line"><div class="ocr-line-text">' + OCR_LABELS[f] + 'の候補（名刺と合うものをタップ。入力後に手で直せます）</div><div class="ocr-assign">' +
         parsed.candidates[f].map(function (v) { return '<button type="button" data-f="' + f + '" data-v="' + esc(v) + '">' + esc(v) + '</button>'; }).join('') +
         '</div></div>';
     }).join('');
@@ -1792,8 +1852,9 @@
     if (!f) return;
     var input = document.getElementById('f_' + f);
     input.value = e.target.getAttribute('data-v');
-    input.classList.add('needs-check');
-    setStatus('候補を入力しました。名刺と見比べて確認してください');
+    // 利用者が選んだ値なので、強調を外して手入力と同じ扱いにする
+    input.classList.remove('needs-check', 'ocr-filled');
+    setStatus(OCR_LABELS[f] + 'に候補を入力しました。違うところがあれば手で直してください');
   });
 
   // ---- 四隅を合わせる台形補正（斜めに撮れた名刺を、正面から見た形に直す） ----
@@ -1944,24 +2005,34 @@
     ocrBtn.disabled = true;
     var originalLabel = ocrBtn.textContent;
     ocrBtn.textContent = '読み取り中…(初回は時間がかかります)';
-    setStatus('写真から文字を読み取っています…（読み方を変えて5回読むため、30秒〜1分ほどかかることがあります）');
+    setStatus('写真から文字を読み取っています…（前処理を変えて4回読むため、30秒ほどかかることがあります）');
 
     loadOcrSource().then(readCard).then(function (parsed) {
       ocrUsed = true;
       if (parsed.quarter) uprightPhoto(parsed.quarter);
-      var labels = { company: '会社名', name: '氏名', department: '部署', title: '役職', email: 'メールアドレス', phone: '電話番号', address: '住所' };
+      var labels = OCR_LABELS;
       var filled = [];
       var missing = [];
       var kept = [];
-      Object.keys(labels).forEach(function (f) {
+      OCR_FIELDS.forEach(function (f) {
         var input = document.getElementById('f_' + f);
         // 手で入力・修正した項目は触らない。空欄と、前回の自動入力のままの項目だけ入れる
-        var replaceable = !input.value || input.classList.contains('needs-check');
+        var replaceable = !input.value || input.classList.contains('ocr-filled');
+        input.classList.remove('needs-check');
         if (parsed[f] && replaceable) {
           input.value = parsed[f];
-          input.classList.add('needs-check');
+          input.classList.add('ocr-filled');
+          // 一致して読めた場合でも同じ読み違いが重なることがあるので、メールは必ず見比べてもらう
+          if (f === 'email') input.classList.add('needs-check');
           filled.push(labels[f]);
-        } else if (!input.value && f !== 'department') {
+        } else if (parsed.candidates[f] && replaceable) {
+          // 読み方が分かれた項目は空欄にして、ここだけ目立たせる
+          input.value = '';
+          input.classList.remove('ocr-filled');
+          input.classList.add('needs-check');
+          missing.push(labels[f]);
+        } else if (!input.value && ['name', 'company', 'email'].indexOf(f) !== -1) {
+          input.classList.add('needs-check');
           missing.push(labels[f]);
         } else if (input.value) {
           kept.push(labels[f]);
@@ -1972,12 +2043,11 @@
       showOcrCandidates(parsed);
       ocrResultWrap.style.display = 'block';
       ocrLinesDetails.open = false;
-      var hint = filled.length ? ('自動入力しました（色枠の項目）: ' + filled.join('・') + '。必ず名刺と見比べて確認してください。')
+      var hint = filled.length ? ('自動入力しました: ' + filled.join('・') + '。')
         : (kept.length ? '新しく自動入力した項目はありません。' : '自動入力できる項目は見つかりませんでした。');
       if (kept.length) hint += ' 入力済みの項目はそのままにしました: ' + kept.join('・') + '。';
-      if (missing.length) hint += ' 判別できなかった項目: ' + missing.join('・') + '（空欄のままです。候補を選ぶか、手入力するか、「読み取った行」から割り当ててください）。';
-      var undecided = OCR_FIELDS.filter(function (f) { return parsed.candidates[f]; }).map(function (f) { return labels[f]; });
-      if (undecided.length) hint += ' 読み方を変えると結果が分かれた項目は確定していません: ' + undecided.join('・') + '。下の候補から名刺と合うものを選ぶか、手入力してください。';
+      if (missing.length) hint += ' 確認が必要な項目（色枠）: ' + missing.join('・') + '。下の候補を選ぶか、手入力してください。';
+      if (parsed.email) hint += ' メールアドレスは1文字違いでも届かないので、名刺と見比べてください。';
       if (parsed.quarter) hint += ' 写真の向きを自動で直して読み取りました。';
       if (missing.length >= 2) hint += ' 名刺が斜めに写っている場合は「四隅を合わせて補正」を使ってから読み取り直すと、読み取りやすくなります。';
       ocrResultHint.textContent = hint;
@@ -2060,6 +2130,7 @@
       var subParts = [c.company, c.department, c.title].filter(Boolean).join(' / ');
       var rows = '';
       if (c.phone) rows += '<div class="card-row"><span class="k">電話</span><span>' + esc(c.phone) + '</span></div>';
+      if (c.mobile) rows += '<div class="card-row"><span class="k">携帯</span><span>' + esc(c.mobile) + '</span></div>';
       if (c.email) rows += '<div class="card-row"><span class="k">メール</span><span>' + esc(c.email) + '</span></div>';
       if (c.address) rows += '<div class="card-row"><span class="k">住所</span><span>' + esc(c.address) + '</span></div>';
       if (c.metDate) rows += '<div class="card-row"><span class="k">交換日</span><span>' + esc(c.metDate) + '</span></div>';
@@ -2131,11 +2202,13 @@
   function checkFormats(v) {
     var warnings = [];
     if (v.email && !EMAIL_FORMAT_RE.test(v.email)) warnings.push('メールアドレスの形が正しくないようです。');
-    if (v.phone && v.phone.charAt(0) !== '+') {
-      var digits = v.phone.replace(/\D/g, '');
-      if (digits.length !== 10 && digits.length !== 11) warnings.push('電話番号の桁数（' + digits.length + '桁）が通常の10〜11桁と違います。');
-      else if (digits.charAt(0) !== '0') warnings.push('電話番号が0から始まっていません。');
-    }
+    [['電話番号', v.phone], ['携帯電話番号', v.mobile]].forEach(function (item) {
+      if (!item[1] || item[1].charAt(0) === '+') return;
+      var digits = item[1].replace(/\D/g, '');
+      if (digits.length !== 10 && digits.length !== 11) warnings.push(item[0] + 'の桁数（' + digits.length + '桁）が通常の10〜11桁と違います。');
+      else if (digits.charAt(0) !== '0') warnings.push(item[0] + 'が0から始まっていません。');
+    });
+    if (v.mobile && v.mobile.charAt(0) !== '+' && !/^0[789]0/.test(v.mobile.replace(/\D/g, ''))) warnings.push('携帯電話番号が090・080・070で始まっていません。固定電話の番号ではないか確認してください。');
     if (v.address) {
       if (!/\d/.test(v.address)) warnings.push('住所に番地の数字が見当たりません。途中までしか読めていない可能性があります。');
       var postal = /(\d{3})-?(\d{4})/.exec(v.address);
@@ -2160,7 +2233,7 @@
     }
     var emailOk = !v.email || EMAIL_FORMAT_RE.test(v.email);
     if (!ocrUsed && emailOk) { doSave(); return; }
-    var rows = [['氏名', v.name], ['会社名', v.company], ['役職', v.title], ['メール', v.email], ['電話番号', v.phone], ['住所', v.address]];
+    var rows = [['氏名', v.name], ['会社名', v.company], ['役職', v.title], ['固定電話', v.phone], ['携帯電話', v.mobile], ['メール', v.email], ['住所', v.address]];
     var html = rows.map(function (r) {
       return '<div class="card-row"><span class="k">' + r[0] + '</span><span>' + (r[1] ? esc(r[1]) : '<span style="color:var(--danger);">（未入力）</span>') + '</span></div>';
     }).join('');
@@ -2270,7 +2343,7 @@
   exportCsvBtn.addEventListener('click', function () {
     var columns = [
       ['氏名', 'name'], ['会社名', 'company'], ['部署', 'department'], ['役職', 'title'],
-      ['電話番号', 'phone'], ['メールアドレス', 'email'], ['住所', 'address'],
+      ['電話番号', 'phone'], ['携帯電話番号', 'mobile'], ['メールアドレス', 'email'], ['住所', 'address'],
       ['名刺交換日', 'metDate'], ['交流会名', 'eventName'], ['会話メモ', 'memo']
     ];
     var header = columns.map(function (c) { return csvCell(c[0]); }).concat([csvCell('お礼メール下書き日時'), csvCell('登録日時'), csvCell('更新日時')]);
@@ -2302,6 +2375,7 @@
             department: item.department || '',
             title: item.title || '',
             phone: item.phone || '',
+            mobile: item.mobile || '',
             email: item.email || '',
             address: item.address || '',
             metDate: item.metDate || '',
