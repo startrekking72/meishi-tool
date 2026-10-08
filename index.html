@@ -626,6 +626,8 @@
   var fields = ['name', 'company', 'department', 'title', 'phone', 'email', 'address', 'metDate', 'eventName', 'memo'];
   var currentPhotoDataUrl = '';
   var ocrSourceImage = null;
+  // 補正・回転する前の写真。補正後の写真（currentPhotoDataUrl）とは別に残す
+  var originalPhotoDataUrl = '';
   var ocrUsed = false;
 
   function pad(n) { return String(n).padStart(2, '0'); }
@@ -1042,6 +1044,7 @@
       }
       // 保存用は縮小する。文字読み取りには細部が残る元の写真を使う
       currentPhotoDataUrl = drawResized(img, 1280, 0.72);
+      originalPhotoDataUrl = currentPhotoDataUrl;
       ocrSourceImage = img;
       showPhotoPreview(currentPhotoDataUrl);
       var metDateField = document.getElementById('f_metDate');
@@ -1058,6 +1061,7 @@
 
   removePhotoBtn.addEventListener('click', function () {
     currentPhotoDataUrl = '';
+    originalPhotoDataUrl = '';
     ocrSourceImage = null;
     hidePhotoPreview();
   });
@@ -1099,6 +1103,11 @@
     return parts.length === 2 ? parts.join(' ') : parts.join('');
   }
 
+  // 「@」の前後に英数字が続く、メールアドレスらしい並びがあるか
+  function hasEmail(text) {
+    return /[A-Za-z0-9._-]\s*@\s*[A-Za-z0-9-]/.test(text);
+  }
+
   function extractEmail(lines) {
     for (var i = 0; i < lines.length; i++) {
       if (lines[i].indexOf('@') === -1) continue;
@@ -1113,7 +1122,7 @@
     var labeled = '';
     var plain = '';
     lines.forEach(function (line) {
-      if (line.indexOf('@') !== -1 || /https?:|www\./i.test(line)) return;
+      if (hasEmail(line) || /https?:|www\./i.test(line)) return;
       // FAX番号を電話番号として拾わない
       var seg = line.replace(/(FAX|F\s*A\s*X|ファ[ッツ]?クス)[\s\S]*$/i, '');
       var found = seg.match(re) || [];
@@ -1159,7 +1168,7 @@
     var best = '';
     for (var i = 0; i < lines.length; i++) {
       var tidy = squeezeJa(lines[i]);
-      if (tidy.indexOf('@') !== -1) continue;
+      if (hasEmail(tidy)) continue;
       var alone = /^(?:〒|T|干)?\s*(\d{3}-\d{4})$/.exec(tidy);
       if (alone) { pendingPostal = alone[1]; continue; }
       var m = addrRe.exec(tidy);
@@ -1173,6 +1182,13 @@
       if (value.length > best.length) best = value;
     }
     return best;
+  }
+
+  // 隣の図柄などを読み違えて前後に付いた記号（「【」など）を取り除く。文字そのものは変えない
+  function trimJunk(value) {
+    return (value || '')
+      .replace(/^[\s【】「」『』\[\]{}|｜_—=~^*`'"・.,:;<>]+/, '')
+      .replace(/[\s【】「」『』\[\]{}|｜_—=~^*`'"・,:;<>]+$/, '');
   }
 
   // 読み取った行（文字・信頼度・文字の高さ）から各項目を取り出す。
@@ -1201,7 +1217,7 @@
 
     rows.forEach(function (row) {
       var line = row.text;
-      if (line.indexOf('@') !== -1 || /https?:|www\./i.test(line)) return;
+      if (hasEmail(line) || /https?:|www\./i.test(line)) return;
       var tidy = row.tidy;
       var compact = tidy.replace(/\s+/g, '');
       if (COMPANY_RE.test(tidy)) {
@@ -1255,7 +1271,7 @@
     if (!out.company) {
       extra.some(function (text) {
         var tidy = squeezeJa(text);
-        if (tidy.indexOf('@') === -1 && COMPANY_RE.test(tidy)) out.company = pickCompany(tidy);
+        if (!hasEmail(tidy) && COMPANY_RE.test(tidy)) out.company = pickCompany(tidy);
         return !!out.company;
       });
     }
@@ -1269,6 +1285,7 @@
       .sort(function (a, b) { return b.h - a.h; });
     if (named.length === 1 || (named.length > 1 && named[0].h >= named[1].h * 1.25)) out.name = named[0].value;
     out.nameCandidates = nameCandidates.map(function (c) { return c.value; });
+    ['name', 'company', 'department', 'title', 'address'].forEach(function (f) { out[f] = trimJunk(out[f]); });
     return out;
   }
 
@@ -1526,16 +1543,110 @@
       .catch(function () { return ''; });
   }
 
-  // 複数回の読み取りで食い違いがないときだけメールアドレスを確定する。食い違ったら候補として返すだけにする
-  function decideEmail(reread, others) {
-    var readings = others.filter(Boolean);
-    var distinct = [];
-    (reread ? [reread] : []).concat(readings).forEach(function (v) {
-      if (distinct.indexOf(v) === -1) distinct.push(v);
+  // 背景（紙）の明るさで割って照明むらや影をならす。白黒2値にはせず、文字の濃淡と細い線を残す。
+  // lo〜lo+span の範囲を黒〜白に引き伸ばしてコントラストを付ける
+  function flattenCanvas(canvas, lo, span, cell) {
+    var W = canvas.width, H = canvas.height;
+    var ctx = canvas.getContext('2d');
+    var d = ctx.getImageData(0, 0, W, H);
+    var px = d.data;
+    var gray = new Float32Array(W * H);
+    var i, x, y;
+    for (i = 0; i < W * H; i++) gray[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+    // マス目ごとに明るい側の値（＝文字のない紙の色）を取る
+    var gw = Math.ceil(W / cell), gh = Math.ceil(H / cell);
+    var grid = new Float32Array(gw * gh);
+    for (var gy = 0; gy < gh; gy++) {
+      for (var gx = 0; gx < gw; gx++) {
+        var vals = [];
+        for (y = gy * cell; y < Math.min(H, (gy + 1) * cell); y += 2) {
+          for (x = gx * cell; x < Math.min(W, (gx + 1) * cell); x += 2) vals.push(gray[y * W + x]);
+        }
+        vals.sort(function (p, q) { return p - q; });
+        grid[gy * gw + gx] = vals.length ? vals[Math.floor(vals.length * 0.9)] : 255;
+      }
+    }
+    for (y = 0; y < H; y++) {
+      var fy = Math.min(gh - 1, Math.max(0, y / cell - 0.5));
+      var y0 = Math.floor(fy), y1 = Math.min(gh - 1, y0 + 1), ty = fy - y0;
+      for (x = 0; x < W; x++) {
+        var fx = Math.min(gw - 1, Math.max(0, x / cell - 0.5));
+        var x0 = Math.floor(fx), x1 = Math.min(gw - 1, x0 + 1), tx = fx - x0;
+        var paper = (grid[y0 * gw + x0] * (1 - tx) + grid[y0 * gw + x1] * tx) * (1 - ty) +
+          (grid[y1 * gw + x0] * (1 - tx) + grid[y1 * gw + x1] * tx) * ty;
+        i = y * W + x;
+        var v = Math.round(Math.max(0, Math.min(1, (gray[i] / Math.max(1, paper) - lo) / span)) * 255);
+        px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v;
+      }
+    }
+    ctx.putImageData(d, 0, 0);
+    return canvas;
+  }
+
+  // 白黒にした画像から、QRコード・写真・ロゴのように黒い点が面で詰まった部分を探す。
+  // 文字の行は行間に白い隙間があるので、本文4行分より大きく詰まった塊だけを対象にする。返すのは割合(0〜1)の矩形
+  function findGraphics(canvas, lineHeight) {
+    var W = canvas.width, H = canvas.height;
+    var px = canvas.getContext('2d').getImageData(0, 0, W, H).data;
+    var cell = Math.max(8, Math.round(lineHeight / 2));
+    var gw = Math.ceil(W / cell), gh = Math.ceil(H / cell);
+    var dark = new Uint32Array(gw * gh), total = new Uint32Array(gw * gh);
+    for (var y = 0; y < H; y++) {
+      var row = Math.floor(y / cell) * gw;
+      for (var x = 0; x < W; x++) {
+        var g = row + Math.floor(x / cell);
+        total[g]++;
+        if (px[(y * W + x) * 4] < 128) dark[g]++;
+      }
+    }
+    var busy = new Uint8Array(gw * gh);
+    for (var i = 0; i < gw * gh; i++) busy[i] = dark[i] >= total[i] * 0.25 ? 1 : 0;
+    // 上下左右と斜めがすべて詰まっているマスだけを芯とする。文字の行は高さがマス2つ分ほどしかないので芯にならず、
+    // QRコードのすぐ隣に文字があっても一緒に消してしまうことがない
+    var core = new Uint8Array(gw * gh);
+    for (var cy0 = 1; cy0 < gh - 1; cy0++) {
+      for (var cx0 = 1; cx0 < gw - 1; cx0++) {
+        var all = true;
+        for (var oy = -1; oy <= 1 && all; oy++) {
+          for (var ox = -1; ox <= 1; ox++) { if (!busy[(cy0 + oy) * gw + cx0 + ox]) { all = false; break; } }
+        }
+        if (all) core[cy0 * gw + cx0] = 1;
+      }
+    }
+    busy = core;
+    var rects = [];
+    for (var start = 0; start < gw * gh; start++) {
+      if (busy[start] !== 1) continue;
+      var stack = [start], count = 0, minX = gw, minY = gh, maxX = 0, maxY = 0;
+      busy[start] = 2;
+      while (stack.length) {
+        var c = stack.pop();
+        var cx = c % gw, cy = (c - cx) / gw;
+        count++;
+        if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+        [[cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1]].forEach(function (n) {
+          if (n[0] < 0 || n[1] < 0 || n[0] >= gw || n[1] >= gh) return;
+          var k = n[1] * gw + n[0];
+          if (busy[k] === 1) { busy[k] = 2; stack.push(k); }
+        });
+      }
+      var bw = maxX - minX + 1, bh = maxY - minY + 1;
+      // 芯は外周1マス分だけ小さくなっているので、その分を足して大きさを見る
+      if ((bw + 2) * cell >= lineHeight * 4 && (bh + 2) * cell >= lineHeight * 4 && count >= bw * bh * 0.55) {
+        rects.push({ x: (minX - 1.5) * cell / W, y: (minY - 1.5) * cell / H, w: (bw + 3) * cell / W, h: (bh + 3) * cell / H });
+      }
+    }
+    return rects;
+  }
+
+  function maskRects(canvas, rects) {
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    rects.forEach(function (r) {
+      ctx.fillRect(Math.round(r.x * canvas.width), Math.round(r.y * canvas.height), Math.round(r.w * canvas.width), Math.round(r.h * canvas.height));
     });
-    if (!distinct.length) return { value: '', candidates: [] };
-    var agreed = reread ? readings.indexOf(reread) !== -1 : (readings.length >= 2 && distinct.length === 1);
-    return agreed ? { value: reread || distinct[0], candidates: [] } : { value: '', candidates: distinct };
+    return canvas;
   }
 
   function toItems(lines) {
@@ -1544,32 +1655,66 @@
     });
   }
 
-  function emailOf(lines) {
-    return extractEmail(lines.filter(function (l) { return l.confidence >= 30; })
-      .map(function (l) { return normalizeOcrText(l.text || ''); }));
+  // 同じ項目を、前処理の違う画像ごとに読んだ結果を突き合わせる。readings は { value, source } の並び。
+  // 別々の画像（source）2つ以上で読めて、読めた結果がすべて同じだったものだけを確定する。同じ画像を読み方だけ変えた
+  // 結果どうしの一致は、同じ読み違いを繰り返しやすいので数えない。それ以外は確定せず、読めた結果を候補として返す（多く読めた順）
+  function voteReadings(readings) {
+    var groups = [];
+    readings.forEach(function (r) {
+      if (!r.value) return;
+      var key = r.value.replace(/\s+/g, '').toLowerCase();
+      var hit = groups.filter(function (g) { return g.key === key; })[0];
+      if (!hit) { hit = { key: key, value: r.value, sources: [] }; groups.push(hit); }
+      if (hit.sources.indexOf(r.source) === -1) hit.sources.push(r.source);
+    });
+    // 食い違う読み方が1つでもあれば確定しない（2対1の多数決でも、多い側が読み違いのことがあった）
+    if (groups.length === 1 && groups[0].sources.length >= 2) return { value: groups[0].value, candidates: [] };
+    groups.sort(function (p, q) { return q.sources.length - p.sources.length; });
+    return { value: '', candidates: groups.slice(0, 4).map(function (g) { return g.value; }) };
   }
 
-  // 傾きと向きを合わせて全体を読み、文字のある範囲だけを大きく写して読み直す
+  var OCR_FIELDS = ['name', 'company', 'department', 'title', 'phone', 'email', 'address'];
+
+  // 傾きと向きを合わせて全体を読み、文字のある範囲だけを大きく写して、前処理を変えながら読み直す
   function readCard(img) {
     var full = { x: 0, y: 0, w: 1, h: 1 };
-    var first, main, aux, closeCanvas, quarter;
+    var source = img;
+    var quarter = 0;
+    var passes = [];
+    var sharp;
 
-    function readClose(source, whole, region, sourceQuarter) {
-      if (!region) {
-        closeCanvas = whole;
-        main = first;
-        return recognize(whole, '4', '(2/2)');
-      }
-      // 本文の1行が読み取りやすい高さ（約34px）になる倍率にする
+    function readClose(whole, region) {
       var firstScale = Math.max(whole.width, whole.height) / Math.max(source.width, source.height);
-      closeCanvas = renderForOcr(source, region, 2600, firstScale * 34 / region.lineHeight, sourceQuarter, 0);
-      return recognize(closeCanvas, '11', '(2/3)').then(function (lines) {
-        main = lines;
-        return recognize(closeCanvas, '4', '(3/3)');
-      });
+      // 文字の範囲が分からなかったときは写真全体を対象にする
+      if (!region) region = { x: 0, y: 0, w: 1, h: 1, lineHeight: 34 };
+      // 本文1行の高さが target(px) になる倍率で、文字のある範囲を写す
+      function shot(target, maxDim) {
+        return drawRegion(source, region, maxDim, firstScale * target / region.lineHeight, quarter, 0);
+      }
+      function lineHeightOn(canvas) {
+        return region.lineHeight * canvas.width / (region.w * whole.width);
+      }
+      function keep(lines) { passes.push(lines); }
+
+      // 1・2回目：白黒にした画像を、散らばった文字向けと行のつながり重視の2通りで読む
+      sharp = binarizeCanvas(shot(34, 2600));
+      var graphics = findGraphics(sharp, lineHeightOn(sharp));
+      maskRects(sharp, graphics);
+      return recognize(sharp, '11', '(2/5)').then(keep).then(function () {
+        return recognize(sharp, '4', '(3/5)');
+      }).then(keep).then(function () {
+        // 3回目：濃淡を残したまま影をならし、少し大きめに写して読む
+        var soft = shot(44, 2800);
+        flattenCanvas(soft, 0.35, 0.6, Math.max(16, Math.round(lineHeightOn(soft) * 1.4)));
+        return recognize(maskRects(soft, graphics), '11', '(4/5)');
+      }).then(keep).then(function () {
+        // 4回目：さらに大きく、コントラストを強めて読む（細い文字・小さい文字向け）
+        var bold = shot(56, 3000);
+        flattenCanvas(bold, 0.55, 0.3, Math.max(16, Math.round(lineHeightOn(bold) * 1.4)));
+        return recognize(maskRects(bold, graphics), '11', '(5/5)');
+      }).then(keep);
     }
 
-    var source = img;
     return scanWhole(img, 0).then(function (upright) {
       var skew = estimateSkew(upright.canvas);
       if (!skew) return findOrientation(img, upright);
@@ -1577,39 +1722,29 @@
       source = drawRegion(img, full, Math.min(3600, Math.max(img.width, img.height)), 1, 0, skew);
       return findOrientation(source);
     }).then(function (found) {
-      first = found.lines;
       quarter = found.quarter;
-      return readClose(source, found.canvas, findTextRegion(first, found.canvas.width, found.canvas.height), quarter);
-    }).then(function (lines) {
-      aux = lines;
-      return rereadEmailLine(closeCanvas, main.concat(aux));
+      return readClose(found.canvas, findTextRegion(found.lines, found.canvas.width, found.canvas.height));
+    }).then(function () {
+      return rereadEmailLine(sharp, passes[0].concat(passes[1]));
     }).then(function (rereadEmail) {
-      var auxTexts = aux.concat(first === main ? [] : first)
-        .filter(function (l) { return l.confidence >= 45; }).map(function (l) { return l.text; });
-      var parsed = parseCardLines(toItems(main), auxTexts);
-      var alt = parseCardLines(toItems(aux));
-      var early = first === main ? null : parseCardLines(toItems(first));
-
-      // 氏名は読み方ごとの結果を突き合わせ、2つ以上で一致したものを優先する
-      var names = [parsed.name, alt.name, early ? early.name : ''].filter(Boolean);
-      var agreedName = names.filter(function (n, i) { return names.indexOf(n) !== i; })[0];
-      parsed.name = agreedName || names[0] || '';
-      parsed.nameAlternatives = names.filter(function (n, i) { return n !== parsed.name && names.indexOf(n) === i; });
-      // 会社名・部署・役職も、2つ以上の読み方で一致したものを優先し、なければ最初に読めたものを使う
-      ['company', 'department', 'title'].forEach(function (f) {
-        var readings = [parsed[f], alt[f], early ? early[f] : ''].filter(Boolean);
-        parsed[f] = readings.filter(function (v, i) { return readings.indexOf(v) !== i; })[0] || readings[0] || '';
+      var parses = passes.map(function (lines) { return parseCardLines(toItems(lines)); });
+      var result = { candidates: {}, quarter: quarter, lines: [] };
+      OCR_FIELDS.forEach(function (f) {
+        // 1・2回目とメールの読み直しは同じ白黒画像、3回目・4回目はそれぞれ別の画像
+        var sources = ['sharp', 'sharp', 'soft', 'bold'];
+        var readings = parses.map(function (parsed, i) { return { value: parsed[f], source: sources[i] }; });
+        if (f === 'email') readings.push({ value: rereadEmail, source: 'sharp' });
+        var decided = voteReadings(readings);
+        result[f] = decided.value;
+        if (decided.candidates.length) result.candidates[f] = decided.candidates;
       });
-      parsed.nameCandidates.concat(alt.nameCandidates, early ? early.nameCandidates : []).forEach(function (line) {
-        var key = line.replace(/\s+/g, '');
-        if (!parsed.lines.some(function (l) { return l.replace(/\s+/g, '') === key; })) parsed.lines.push(line);
+      parses.forEach(function (parsed) {
+        parsed.lines.forEach(function (line) {
+          var key = line.replace(/\s+/g, '');
+          if (!result.lines.some(function (l) { return l.replace(/\s+/g, '') === key; })) result.lines.push(line);
+        });
       });
-
-      var email = decideEmail(rereadEmail, [emailOf(main), emailOf(aux), first === main ? '' : emailOf(first)]);
-      parsed.email = email.value;
-      parsed.emailCandidates = email.candidates;
-      parsed.quarter = quarter;
-      return parsed;
+      return result;
     });
   }
 
@@ -1644,12 +1779,10 @@
 
   // 読み方が分かれた項目は自動で入れず、候補として並べて選んでもらう
   function showOcrCandidates(parsed) {
-    var groups = [];
-    if (parsed.emailCandidates.length) groups.push(['email', 'メールアドレスの候補', parsed.emailCandidates]);
-    if (parsed.nameAlternatives.length) groups.push(['name', '氏名の別の読み方', parsed.nameAlternatives]);
-    ocrCandidates.innerHTML = groups.map(function (g) {
-      return '<div class="ocr-line"><div class="ocr-line-text">' + g[1] + '（名刺と見比べて、正しいものをタップ）</div><div class="ocr-assign">' +
-        g[2].map(function (v) { return '<button type="button" data-f="' + g[0] + '" data-v="' + esc(v) + '">' + esc(v) + '</button>'; }).join('') +
+    var labels = { name: '氏名', company: '会社名', department: '部署', title: '役職', phone: '電話番号', email: 'メールアドレス', address: '住所' };
+    ocrCandidates.innerHTML = OCR_FIELDS.filter(function (f) { return parsed.candidates[f]; }).map(function (f) {
+      return '<div class="ocr-line"><div class="ocr-line-text">' + labels[f] + 'の候補（名刺と見比べて、合うものをタップ。入力後に手で直せます）</div><div class="ocr-assign">' +
+        parsed.candidates[f].map(function (v) { return '<button type="button" data-f="' + f + '" data-v="' + esc(v) + '">' + esc(v) + '</button>'; }).join('') +
         '</div></div>';
     }).join('');
   }
@@ -1811,7 +1944,7 @@
     ocrBtn.disabled = true;
     var originalLabel = ocrBtn.textContent;
     ocrBtn.textContent = '読み取り中…(初回は時間がかかります)';
-    setStatus('写真から文字を読み取っています…（30秒ほどかかることがあります）');
+    setStatus('写真から文字を読み取っています…（読み方を変えて5回読むため、30秒〜1分ほどかかることがあります）');
 
     loadOcrSource().then(readCard).then(function (parsed) {
       ocrUsed = true;
@@ -1842,11 +1975,11 @@
       var hint = filled.length ? ('自動入力しました（色枠の項目）: ' + filled.join('・') + '。必ず名刺と見比べて確認してください。')
         : (kept.length ? '新しく自動入力した項目はありません。' : '自動入力できる項目は見つかりませんでした。');
       if (kept.length) hint += ' 入力済みの項目はそのままにしました: ' + kept.join('・') + '。';
-      if (missing.length) hint += ' 判別できなかった項目: ' + missing.join('・') + '（空欄のままです。手入力するか、下の「読み取った行」から割り当ててください）。';
-      if (parsed.nameCandidates.length > 1 && !parsed.name) hint += ' 氏名の候補が複数あったため、氏名は自動入力していません。';
-      if (parsed.emailCandidates.length) hint += ' メールアドレスは読み取るたびに結果が分かれたため、自動入力していません。下の候補を名刺と見比べて選ぶか、手入力してください。';
+      if (missing.length) hint += ' 判別できなかった項目: ' + missing.join('・') + '（空欄のままです。候補を選ぶか、手入力するか、「読み取った行」から割り当ててください）。';
+      var undecided = OCR_FIELDS.filter(function (f) { return parsed.candidates[f]; }).map(function (f) { return labels[f]; });
+      if (undecided.length) hint += ' 読み方を変えると結果が分かれた項目は確定していません: ' + undecided.join('・') + '。下の候補から名刺と合うものを選ぶか、手入力してください。';
       if (parsed.quarter) hint += ' 写真の向きを自動で直して読み取りました。';
-      if (missing.length >= 2 || parsed.emailCandidates.length) hint += ' 名刺が斜めに写っている場合は「四隅を合わせて補正」を使ってから読み取り直すと、読み取りやすくなります。';
+      if (missing.length >= 2) hint += ' 名刺が斜めに写っている場合は「四隅を合わせて補正」を使ってから読み取り直すと、読み取りやすくなります。';
       ocrResultHint.textContent = hint;
       setStatus(filled.length ? (filled.join('・') + 'を自動入力しました。内容を確認してください') : '文字は読み取れましたが、自動入力できる項目はありませんでした');
     }).catch(function (err) {
@@ -1879,6 +2012,7 @@
     ocrUsed = false;
     editingId = null;
     currentPhotoDataUrl = '';
+    originalPhotoDataUrl = '';
     ocrSourceImage = null;
     hidePhotoPreview();
     formTitle.textContent = '新しい名刺を追加';
@@ -1892,6 +2026,7 @@
     ocrUsed = false;
     editingId = card.id;
     currentPhotoDataUrl = card.photo || '';
+    originalPhotoDataUrl = card.photoOriginal || '';
     ocrSourceImage = null;
     if (currentPhotoDataUrl) showPhotoPreview(currentPhotoDataUrl); else hidePhotoPreview();
     formTitle.textContent = '名刺を編集';
@@ -1943,6 +2078,7 @@
         '</div></div>' +
         rows + memo + badge +
         '<div class="card-actions">' +
+        (c.photoOriginal ? '<button class="btn-small orig-btn">元の写真</button>' : '') +
         '<button class="btn-small mail-btn">お礼メールを作成</button>' +
         '<button class="btn-small edit-btn">編集</button>' +
         '<button class="btn-small btn-danger delete-btn">削除</button>' +
@@ -1956,7 +2092,10 @@
     var id = cardEl.getAttribute('data-id');
     var card = cards.find(function (c) { return c.id === id; });
     if (!card) return;
-    if (e.target.classList.contains('mail-btn')) {
+    if (e.target.classList.contains('orig-btn')) {
+      lightboxImg.src = card.photoOriginal;
+      lightbox.classList.add('show');
+    } else if (e.target.classList.contains('mail-btn')) {
       openMailModal(card);
     } else if (e.target.classList.contains('edit-btn')) {
       fillForm(card);
@@ -1974,6 +2113,44 @@
 
   var confirmModal = document.getElementById('confirmModal');
 
+  // 郵便番号の上2桁と都道府県の対応（おおよその目安。境界付近には例外がある）
+  var POSTAL_AREAS = [
+    [0, 0, '北海道'], [1, 1, '秋田県'], [2, 2, '岩手県'], [3, 3, '青森県'], [4, 9, '北海道'],
+    [10, 20, '東京都'], [21, 25, '神奈川県'], [26, 29, '千葉県'], [30, 31, '茨城県'], [32, 32, '栃木県'],
+    [33, 36, '埼玉県'], [37, 37, '群馬県'], [38, 39, '長野県'], [40, 40, '山梨県'], [41, 43, '静岡県'],
+    [44, 49, '愛知県'], [50, 50, '岐阜県'], [51, 51, '三重県'], [52, 52, '滋賀県'], [53, 59, '大阪府'],
+    [60, 62, '京都府'], [63, 63, '奈良県'], [64, 64, '和歌山県'], [65, 67, '兵庫県'], [68, 68, '鳥取県・島根県'],
+    [69, 69, '島根県'], [70, 71, '岡山県'], [72, 73, '広島県'], [74, 75, '山口県'], [76, 76, '香川県'],
+    [77, 77, '徳島県'], [78, 78, '高知県'], [79, 79, '愛媛県'], [80, 83, '福岡県'], [84, 84, '佐賀県'],
+    [85, 85, '長崎県'], [86, 86, '熊本県'], [87, 87, '大分県'], [88, 88, '宮崎県'], [89, 89, '鹿児島県'],
+    [90, 90, '沖縄県'], [91, 91, '福井県'], [92, 92, '石川県'], [93, 93, '富山県'], [94, 95, '新潟県'],
+    [96, 97, '福島県'], [98, 98, '宮城県'], [99, 99, '山形県']
+  ];
+
+  // 形式として不自然な点を挙げる。直すのは利用者で、ここでは値を書き換えない
+  function checkFormats(v) {
+    var warnings = [];
+    if (v.email && !EMAIL_FORMAT_RE.test(v.email)) warnings.push('メールアドレスの形が正しくないようです。');
+    if (v.phone && v.phone.charAt(0) !== '+') {
+      var digits = v.phone.replace(/\D/g, '');
+      if (digits.length !== 10 && digits.length !== 11) warnings.push('電話番号の桁数（' + digits.length + '桁）が通常の10〜11桁と違います。');
+      else if (digits.charAt(0) !== '0') warnings.push('電話番号が0から始まっていません。');
+    }
+    if (v.address) {
+      if (!/\d/.test(v.address)) warnings.push('住所に番地の数字が見当たりません。途中までしか読めていない可能性があります。');
+      var postal = /(\d{3})-?(\d{4})/.exec(v.address);
+      var pref = /(北海道|東京都|京都府|大阪府|[\u4e00-\u9fff]{2,3}県)/.exec(v.address.replace(/〒?\s*\d{3}-?\d{4}/, ''));
+      if (postal && pref) {
+        var head = Number(postal[1].slice(0, 2));
+        var area = POSTAL_AREAS.filter(function (r) { return head >= r[0] && head <= r[1]; })[0];
+        if (area && area[2].indexOf(pref[1]) === -1) {
+          warnings.push('郵便番号（' + postal[1] + '-' + postal[2] + '）は通常「' + area[2] + '」の番号ですが、住所は「' + pref[1] + '」です。どちらかが読み違いの可能性があります。');
+        }
+      }
+    }
+    return warnings;
+  }
+
   // 自動読み取りを使った名刺は、保存の前に重要な項目をもう一度見てもらう
   saveBtn.addEventListener('click', function () {
     var v = getFormValues();
@@ -1983,12 +2160,12 @@
     }
     var emailOk = !v.email || EMAIL_FORMAT_RE.test(v.email);
     if (!ocrUsed && emailOk) { doSave(); return; }
-    var rows = [['氏名', v.name], ['会社名', v.company], ['役職', v.title], ['メール', v.email], ['電話番号', v.phone]];
+    var rows = [['氏名', v.name], ['会社名', v.company], ['役職', v.title], ['メール', v.email], ['電話番号', v.phone], ['住所', v.address]];
     var html = rows.map(function (r) {
       return '<div class="card-row"><span class="k">' + r[0] + '</span><span>' + (r[1] ? esc(r[1]) : '<span style="color:var(--danger);">（未入力）</span>') + '</span></div>';
     }).join('');
-    if (!emailOk) html += '<div class="hint" style="color:var(--danger);">メールアドレスの形が正しくないようです。</div>';
-    else if (!v.email) html += '<div class="hint">メールアドレスが空欄です。お礼メールを送る場合は入力してください（後から編集もできます）。</div>';
+    if (!v.email) html += '<div class="hint">メールアドレスが空欄です。お礼メールを送る場合は入力してください（後から編集もできます）。</div>';
+    html += checkFormats(v).map(function (w) { return '<div class="hint" style="color:var(--danger);">' + esc(w) + '</div>'; }).join('');
     document.getElementById('confirmList').innerHTML = html;
     confirmModal.classList.add('show');
   });
@@ -2002,6 +2179,7 @@
   function doSave() {
     var v = getFormValues();
     v.photo = currentPhotoDataUrl;
+    v.photoOriginal = (originalPhotoDataUrl && originalPhotoDataUrl !== currentPhotoDataUrl) ? originalPhotoDataUrl : '';
     var now = Date.now();
     var card;
     var next;
@@ -2130,6 +2308,7 @@
             eventName: item.eventName || '',
             memo: item.memo || '',
             photo: item.photo || '',
+            photoOriginal: item.photoOriginal || '',
             mailTo: item.mailTo || '',
             mailSubject: item.mailSubject || '',
             mailBody: item.mailBody || '',
