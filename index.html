@@ -119,14 +119,6 @@
   .btn-big { min-height: 60px; font-size: 18px; font-weight: 700; flex: 1 1 100%; justify-content: center; border-radius: 12px; }
   .photo-row .file-btn { min-height: 48px; justify-content: center; flex: 1 1 auto; }
   .photo-row .btn-big { min-height: 60px; flex: 1 1 100%; }
-  .main-actions {
-    position: sticky;
-    bottom: 0;
-    background: var(--panel);
-    padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
-    margin-bottom: -10px;
-    z-index: 2;
-  }
 
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
   .search-box { margin-bottom: 14px; }
@@ -321,9 +313,8 @@
           <div id="ocrResultWrap" style="display:none;">
             <div class="hint" id="ocrResultHint"></div>
             <details style="margin-top:6px;" id="ocrLinesDetails">
-              <summary style="cursor:pointer; font-size:12px; color:var(--sub);">読み取った行を項目に割り当てる（手動修正用）</summary>
+              <summary style="cursor:pointer; font-size:12px; color:var(--sub);">読み取った行を見る・項目に割り当てる</summary>
               <div class="ocr-lines" id="ocrLines"></div>
-              <textarea id="ocrRawText" readonly rows="5" style="margin-top:8px;"></textarea>
             </details>
           </div>
         </div>
@@ -540,7 +531,6 @@
   var ocrBtn = document.getElementById('ocrBtn');
   var ocrResultWrap = document.getElementById('ocrResultWrap');
   var ocrResultHint = document.getElementById('ocrResultHint');
-  var ocrRawText = document.getElementById('ocrRawText');
   var ocrLines = document.getElementById('ocrLines');
   var ocrLinesDetails = document.getElementById('ocrLinesDetails');
   var eventNameList = document.getElementById('eventNameList');
@@ -567,7 +557,7 @@
 
   var fields = ['name', 'company', 'department', 'title', 'phone', 'email', 'address', 'metDate', 'eventName', 'memo'];
   var currentPhotoDataUrl = '';
-  var ocrSourceDataUrl = '';
+  var ocrSourceImage = null;
 
   function pad(n) { return String(n).padStart(2, '0'); }
   function formatNow() {
@@ -922,7 +912,6 @@
   function resetOcrResult() {
     ocrResultWrap.style.display = 'none';
     ocrResultHint.textContent = '';
-    ocrRawText.value = '';
     ocrLines.innerHTML = '';
   }
 
@@ -974,9 +963,9 @@
         countStatus();
         return;
       }
-      // 保存用は小さめ、文字読み取り用は細部が残るよう大きめにしておく
+      // 保存用は縮小する。文字読み取りには細部が残る元の写真を使う
       currentPhotoDataUrl = drawResized(img, 1280, 0.72);
-      ocrSourceDataUrl = drawResized(img, 2000, 0.9);
+      ocrSourceImage = img;
       showPhotoPreview(currentPhotoDataUrl);
       var metDateField = document.getElementById('f_metDate');
       if (!metDateField.value) {
@@ -992,14 +981,14 @@
 
   removePhotoBtn.addEventListener('click', function () {
     currentPhotoDataUrl = '';
-    ocrSourceDataUrl = '';
+    ocrSourceImage = null;
     hidePhotoPreview();
   });
 
   // ---- 名刺の文字読み取り（OCR） ----
   var COMPANY_RE = /(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|NPO法人|特定非営利活動法人|社会福祉法人|医療法人|学校法人|税理士法人|弁護士法人|司法書士法人|行政書士法人|社会保険労務士法人|\(株\)|\(有\)|\(同\)|㈱|㈲|\bInc\b\.?|\bCo\.,?\s?Ltd\b\.?|\bCorp\b\.?|\bCorporation\b|\bLLC\b|\bK\.K\.)/i;
   var TITLE_RE = /(代表取締役社長|代表取締役会長|代表取締役|代表社員|代表理事|取締役|執行役員|理事長|副社長|社長|会長|専務|常務|本部長|事業部長|副部長|部長|次長|課長|係長|主任|主査|室長|所長|支店長|店長|工場長|局長|院長|館長|園長|理事|監事|顧問|参与|代表|マネージャー|マネジャー|リーダー|ディレクター|プロデューサー|プランナー|エンジニア|デザイナー|コンサルタント|アドバイザー|コーディネーター|オーナー|店主|税理士|弁護士|司法書士|行政書士|社会保険労務士|公認会計士|中小企業診断士|\bCEO\b|\bCOO\b|\bCTO\b|\bCFO\b|\bCMO\b|\bManager\b|\bDirector\b|\bPresident\b)/i;
-  var ORG_WORD_RE = /(事業|営業|総務|経理|人事|開発|企画|管理|技術|製造|販売|広報|本部|支店|支社|本社|営業所|事務所|グループ|チーム|センター|研究|工場|担当|推進|戦略|統括|会社|法人)/;
+  var ORG_WORD_RE = /(事業|営業|総務|経理|人事|開発|企画|管理|技術|製造|販売|広報|本部|支店|支社|本社|営業所|事務所|グループ|チーム|センター|研究|工場|担当|推進|戦略|統括|会社|法人|社員|役員)/;
   var ADDRESS_RE = /(^(東京都|北海道|京都府|大阪府|.{2,3}県)|[都道府県].*[市区町村郡]|[市区町村]$|丁目|番地|ビル|〒)/;
   var CJK = '\\u3040-\\u30ff\\u4e00-\\u9fff\\u3005';
 
@@ -1077,34 +1066,84 @@
     return '';
   }
 
-  // 読み取った文字から各項目を取り出す。判別できない項目は空のまま返す（推測で埋めない）
-  function parseCardText(rawText) {
-    var lines = normalizeOcrText(rawText || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
-    var out = { name: '', company: '', department: '', title: '', email: extractEmail(lines), phone: extractPhone(lines), lines: lines.map(squeezeJa) };
+  // 記号や1文字だけの行など、文字として意味を成さない読み取り結果を除く
+  function isMeaningful(tidy) {
+    var compact = tidy.replace(/\s+/g, '');
+    if (compact.length < 2) return false;
+    var solid = (compact.replace(/[ー・一ニ二]/g, '').match(new RegExp('[' + CJK + 'A-Za-z0-9]', 'g')) || []).length;
+    return solid >= 2 && solid / compact.length >= 0.6;
+  }
+
+  function extractAddress(lines) {
+    var addrRe = /[一-鿿]{2,}[都道府県市区郡][一-鿿぀-ヿA-Za-z0-9\-. ]*\d[\d\-.]*(?:[F階号]|号室)?/;
+    var pendingPostal = '';
+    var best = '';
+    for (var i = 0; i < lines.length; i++) {
+      var tidy = squeezeJa(lines[i]);
+      if (tidy.indexOf('@') !== -1) continue;
+      var alone = /^(?:〒|T|干)?\s*(\d{3}-\d{4})$/.exec(tidy);
+      if (alone) { pendingPostal = alone[1]; continue; }
+      var m = addrRe.exec(tidy);
+      if (!m) continue;
+      var pm = /(\d{3}-\d{4})\D*$/.exec(tidy.slice(0, m.index));
+      var postal = pm ? pm[1] : pendingPostal;
+      // 番地の区切りを点と読み違えることがあるので、数字の間の点はハイフンに直す
+      var addr = m[0].replace(/(\d)\.(?=\d)/g, '$1-').replace(/\s+(?=\d)/g, '').replace(/\s+/g, ' ').trim();
+      var value = (postal ? '〒' + postal + ' ' : '') + addr;
+      // 読み方によって途中で切れることがあるので、いちばん長く読めたものを使う
+      if (value.length > best.length) best = value;
+    }
+    return best;
+  }
+
+  // 読み取った行（文字・信頼度・文字の高さ）から各項目を取り出す。
+  // 判別できない項目は空のまま返す（推測で埋めない）。extraTexts は別の読み方で得た行で、メール・電話・住所の補助にだけ使う
+  function parseCardLines(items, extraTexts) {
+    var rows = items.map(function (it) {
+      var text = normalizeOcrText(it.text || '').trim();
+      return { text: text, tidy: squeezeJa(text), conf: it.conf == null ? 100 : it.conf, h: it.h || 0 };
+    }).filter(function (r) { return r.text; });
+    var extra = (extraTexts || []).map(function (t) { return normalizeOcrText(t || '').trim(); }).filter(Boolean);
+    var readable = rows.filter(function (r) { return r.conf >= 45; }).map(function (r) { return r.text; });
+    var out = {
+      name: '', company: '', department: '', title: '',
+      email: extractEmail(extra.concat(readable)),
+      phone: extractPhone(readable.concat(extra)),
+      address: extractAddress(readable.concat(extra)),
+      lines: rows.filter(function (r) { return r.conf >= 50 && isMeaningful(r.tidy); }).map(function (r) { return r.tidy; })
+    };
     var nameCandidates = [];
 
-    function addName(text) {
+    function addName(text, h) {
       var value = formatName(text);
-      if (nameCandidates.indexOf(value) === -1) nameCandidates.push(value);
+      if (!nameCandidates.some(function (c) { return c.value === value; })) nameCandidates.push({ value: value, h: h });
     }
 
-    lines.forEach(function (line) {
+    rows.forEach(function (row) {
+      var line = row.text;
       if (line.indexOf('@') !== -1 || /https?:|www\./i.test(line)) return;
-      var tidy = squeezeJa(line);
+      var tidy = row.tidy;
       var compact = tidy.replace(/\s+/g, '');
       if (COMPANY_RE.test(tidy)) {
-        if (!out.company) out.company = pickCompany(tidy);
+        if (!out.company && row.conf >= 45) out.company = pickCompany(tidy);
         return;
       }
+      // 氏名・部署・役職は形の決まりがなく誤って拾いやすいので、はっきり読めた行だけから取る
       if (/\d/.test(compact)) return;
+      // 氏名の行に紛れ込んだ記号（「山田 ” 太郎」など）は除いて判定する
+      var nameText = line.replace(/[^\w\s぀-ヿ一-鿿々]/g, ' ').trim();
+      if (row.conf >= 50 && !TITLE_RE.test(tidy) && isPersonName(nameText.replace(/\s+/g, ''))) { addName(nameText, row.h); return; }
+      if (row.conf < 60) return;
       var tm = TITLE_RE.exec(tidy);
       if (tm) {
         // 「代表取締役 山田 太郎」のように役職と氏名が同じ行にある場合は分ける
-        var base = TITLE_RE.test(line) ? line : tidy;
+        // 「代表 社員」のように空白で切れて読まれた役職は、空白を詰めた形で判定する
+        var lineMatch = TITLE_RE.exec(line);
+        var base = (lineMatch && lineMatch[0].length >= tm[0].length) ? line : tidy;
         var rest = base.slice(base.search(TITLE_RE)).replace(TITLE_RE, '').trim();
         var head = base;
         if (rest && isPersonName(rest.replace(/\s+/g, ''))) {
-          addName(rest);
+          addName(rest, row.h);
           head = base.slice(0, base.length - rest.length).trim();
         }
         if (!out.title && !/(電話|TEL)/i.test(head)) {
@@ -1123,61 +1162,102 @@
         }
         return;
       }
-      if (isPersonName(compact)) addName(line);
+      // 部署だけが書かれた行（「営業部」「第一営業課」など）
+      if (!out.department && /^[一-鿿゠-ヿ]{2,10}(?:部|課|室|局|本部|事業部|グループ|チーム|センター)$/.test(compact) && ORG_WORD_RE.test(compact)) {
+        out.department = compact;
+      }
     });
 
-    // 氏名らしい行が1つに絞れたときだけ入力する
-    if (nameCandidates.length === 1) out.name = nameCandidates[0];
-    out.nameCandidates = nameCandidates;
+    if (!out.company) {
+      extra.some(function (text) {
+        var tidy = squeezeJa(text);
+        if (tidy.indexOf('@') === -1 && COMPANY_RE.test(tidy)) out.company = pickCompany(tidy);
+        return !!out.company;
+      });
+    }
+
+    // 氏名は名刺の中で大きく書かれるので、本文より小さい・同じ大きさの行（標語など）は氏名にしない。
+    // 候補が複数あるときは、いちばん大きい行がはっきり分かる場合だけ使う
+    var heights = rows.filter(function (r) { return r.conf >= 60 && r.h > 0 && isMeaningful(r.tidy); })
+      .map(function (r) { return r.h; }).sort(function (a, b) { return a - b; });
+    var bodyHeight = heights.length ? heights[Math.floor((heights.length - 1) / 2)] : 0;
+    var named = nameCandidates.filter(function (c) { return !bodyHeight || c.h >= bodyHeight * 1.15; })
+      .sort(function (a, b) { return b.h - a.h; });
+    if (named.length === 1 || (named.length > 1 && named[0].h >= named[1].h * 1.25)) out.name = named[0].value;
+    out.nameCandidates = nameCandidates.map(function (c) { return c.value; });
     return out;
   }
 
+  function parseCardText(rawText) {
+    return parseCardLines((rawText || '').split(/\r?\n/).map(function (t) { return { text: t }; }));
+  }
+
   // 影・机の模様・箔押しなどで読み取りが崩れるのを減らすため、周囲の明るさを基準に白黒へ変換する
-  function binarizeForOcr(dataUrl) {
-    return new Promise(function (resolve) {
-      var img = new Image();
-      img.onerror = function () { resolve(dataUrl); };
-      img.onload = function () {
-        try {
-          var W = img.width, H = img.height;
-          var canvas = document.createElement('canvas');
-          canvas.width = W;
-          canvas.height = H;
-          var ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0);
-          var d = ctx.getImageData(0, 0, W, H);
-          var px = d.data;
-          var gray = new Float32Array(W * H);
-          var integral = new Float64Array((W + 1) * (H + 1));
-          var x, y, i;
-          for (y = 0; y < H; y++) {
-            var rowSum = 0;
-            for (x = 0; x < W; x++) {
-              i = y * W + x;
-              gray[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
-              rowSum += gray[i];
-              integral[(y + 1) * (W + 1) + x + 1] = integral[y * (W + 1) + x + 1] + rowSum;
-            }
-          }
-          var r = Math.round(Math.max(W, H) / 40);
-          for (y = 0; y < H; y++) {
-            var y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1);
-            for (x = 0; x < W; x++) {
-              var x0 = Math.max(0, x - r), x1 = Math.min(W, x + r + 1);
-              var sum = integral[y1 * (W + 1) + x1] - integral[y0 * (W + 1) + x1] - integral[y1 * (W + 1) + x0] + integral[y0 * (W + 1) + x0];
-              i = y * W + x;
-              var v = gray[i] < (sum / ((x1 - x0) * (y1 - y0))) * 0.82 ? 0 : 255;
-              px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v;
-            }
-          }
-          ctx.putImageData(d, 0, 0);
-          resolve(canvas.toDataURL('image/png'));
-        } catch (e) {
-          resolve(dataUrl);
-        }
-      };
-      img.src = dataUrl;
+  function binarizeCanvas(canvas) {
+    var W = canvas.width, H = canvas.height;
+    var ctx = canvas.getContext('2d');
+    var d = ctx.getImageData(0, 0, W, H);
+    var px = d.data;
+    var gray = new Float32Array(W * H);
+    var integral = new Float64Array((W + 1) * (H + 1));
+    var x, y, i;
+    for (y = 0; y < H; y++) {
+      var rowSum = 0;
+      for (x = 0; x < W; x++) {
+        i = y * W + x;
+        gray[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+        rowSum += gray[i];
+        integral[(y + 1) * (W + 1) + x + 1] = integral[y * (W + 1) + x + 1] + rowSum;
+      }
+    }
+    var r = Math.round(Math.max(W, H) / 40);
+    for (y = 0; y < H; y++) {
+      var y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1);
+      for (x = 0; x < W; x++) {
+        var x0 = Math.max(0, x - r), x1 = Math.min(W, x + r + 1);
+        var sum = integral[y1 * (W + 1) + x1] - integral[y0 * (W + 1) + x1] - integral[y1 * (W + 1) + x0] + integral[y0 * (W + 1) + x0];
+        i = y * W + x;
+        var v = gray[i] < (sum / ((x1 - x0) * (y1 - y0))) * 0.82 ? 0 : 255;
+        px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v;
+      }
+    }
+    ctx.putImageData(d, 0, 0);
+    return canvas;
+  }
+
+  // 元画像の rect（0〜1の割合）の範囲を、長辺 maxDim 以内（wantScale があればその倍率）で切り出して白黒にする
+  function renderForOcr(img, rect, maxDim, wantScale) {
+    var sx = Math.round(rect.x * img.width), sy = Math.round(rect.y * img.height);
+    var sw = Math.max(1, Math.round(rect.w * img.width)), sh = Math.max(1, Math.round(rect.h * img.height));
+    var scale = Math.min(2, maxDim / Math.max(sw, sh), wantScale || 2);
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(sw * scale));
+    canvas.height = Math.max(1, Math.round(sh * scale));
+    var ctx = canvas.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    return binarizeCanvas(canvas);
+  }
+
+  // はっきり読めた行が集まっている範囲（＝名刺の文字部分）を割合で、その行の高さ(px)とあわせて返す。見つからないときは null
+  function findTextRegion(lines, W, H) {
+    var x0 = W, y0 = H, x1 = 0, y1 = 0, count = 0;
+    var heights = [];
+    lines.forEach(function (l) {
+      var tidy = squeezeJa(normalizeOcrText(l.text || ''));
+      if (l.confidence < 60 || !isMeaningful(tidy) || tidy.replace(/\s+/g, '').length < 4 || !l.bbox) return;
+      x0 = Math.min(x0, l.bbox.x0); y0 = Math.min(y0, l.bbox.y0);
+      x1 = Math.max(x1, l.bbox.x1); y1 = Math.max(y1, l.bbox.y1);
+      heights.push(l.bbox.y1 - l.bbox.y0);
+      count++;
     });
+    if (count < 2) return null;
+    heights.sort(function (a, b) { return a - b; });
+    var lineHeight = heights[Math.floor((heights.length - 1) / 2)];
+    var padX = Math.max((x1 - x0) * 0.12, W * 0.03), padY = Math.max((y1 - y0) * 0.2, H * 0.04);
+    x0 = Math.max(0, x0 - padX); y0 = Math.max(0, y0 - padY);
+    x1 = Math.min(W, x1 + padX); y1 = Math.min(H, y1 + padY);
+    return { x: x0 / W, y: y0 / H, w: (x1 - x0) / W, h: (y1 - y0) / H, lineHeight: lineHeight };
   }
 
   var tesseractLoading = null;
@@ -1194,17 +1274,98 @@
     return tesseractLoading;
   }
 
+  var ocrWorker = null;
+  var ocrStage = '';
+  function getOcrWorker() {
+    if (ocrWorker) return Promise.resolve(ocrWorker);
+    return loadTesseract().then(function () {
+      return Tesseract.createWorker('jpn+eng', 1, {
+        logger: function (m) {
+          if (m && m.status === 'recognizing text') {
+            ocrBtn.textContent = '読み取り中… ' + ocrStage + ' ' + Math.round((m.progress || 0) * 100) + '%';
+          }
+        }
+      });
+    }).then(function (worker) {
+      ocrWorker = worker;
+      return worker;
+    });
+  }
+
+  // mode '11'＝名刺のように文字が散らばった紙面向け、'4'＝行のつながりを保つ読み方
+  function recognize(canvas, mode, stage) {
+    ocrStage = stage;
+    return getOcrWorker().then(function (worker) {
+      return worker.setParameters({ tessedit_pageseg_mode: mode }).then(function () {
+        return worker.recognize(canvas);
+      });
+    }).then(function (result) {
+      return (result && result.data && result.data.lines) || [];
+    });
+  }
+
+  function loadOcrSource() {
+    if (ocrSourceImage) return Promise.resolve(ocrSourceImage);
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { reject(new Error('写真を読み込めません')); };
+      img.src = currentPhotoDataUrl;
+    });
+  }
+
+  // 1回目で文字のある範囲を探し、2回目以降はその範囲だけを大きく写して読み直す
+  function readCard(img) {
+    var whole = renderForOcr(img, { x: 0, y: 0, w: 1, h: 1 }, 1800);
+    return recognize(whole, '11', '(1/3)').then(function (firstLines) {
+      var region = findTextRegion(firstLines, whole.width, whole.height);
+      if (!region) {
+        return recognize(whole, '4', '(2/2)').then(function (aux) {
+          return { first: firstLines, main: firstLines, aux: aux };
+        });
+      }
+      // 本文の1行が読み取りやすい高さ（約34px）になる倍率で、文字のある範囲だけを写し直す
+      var firstScale = whole.width / img.width;
+      var close = renderForOcr(img, region, 2600, firstScale * 34 / region.lineHeight);
+      return recognize(close, '11', '(2/3)').then(function (main) {
+        return recognize(close, '4', '(3/3)').then(function (aux) {
+          return { first: firstLines, main: main, aux: firstLines.concat(aux) };
+        });
+      });
+    }).then(function (res) {
+      function toItems(lines) {
+        return lines.map(function (l) {
+          return { text: l.text, conf: l.confidence, h: l.bbox ? (l.bbox.y1 - l.bbox.y0) : 0 };
+        });
+      }
+      var auxTexts = res.aux.filter(function (l) { return l.confidence >= 45; }).map(function (l) { return l.text; });
+      var parsed = parseCardLines(toItems(res.main), auxTexts);
+      if (res.first !== res.main) {
+        // 大きな文字（氏名など）は拡大前の方が読めることがあるので、1回目の結果で空欄を補う
+        var early = parseCardLines(toItems(res.first));
+        ['name', 'company', 'department', 'title'].forEach(function (f) {
+          if (!parsed[f]) parsed[f] = early[f];
+        });
+        early.nameCandidates.forEach(function (line) {
+          var key = line.replace(/\s+/g, '');
+          if (!parsed.lines.some(function (l) { return l.replace(/\s+/g, '') === key; })) parsed.lines.push(line);
+        });
+      }
+      return parsed;
+    });
+  }
+
   var ASSIGN_TARGETS = [
     ['name', '氏名'], ['company', '会社名'], ['department', '部署'], ['title', '役職'],
     ['phone', '電話'], ['email', 'メール'], ['address', '住所'], ['memo', 'メモに追記']
   ];
 
   function showOcrLines(lines) {
-    ocrLines.innerHTML = lines.map(function (line, i) {
+    ocrLines.innerHTML = lines.length ? lines.map(function (line, i) {
       return '<div class="ocr-line" data-i="' + i + '"><div class="ocr-line-text">' + esc(line) + '</div><div class="ocr-assign">' +
         ASSIGN_TARGETS.map(function (t) { return '<button type="button" data-f="' + t[0] + '">' + t[1] + '</button>'; }).join('') +
         '</div></div>';
-    }).join('');
+    }).join('') : '<div class="hint">はっきり読み取れた行はありませんでした。</div>';
     ocrLines._lines = lines;
   }
 
@@ -1224,37 +1385,14 @@
   });
 
   ocrBtn.addEventListener('click', function () {
-    var source = ocrSourceDataUrl || currentPhotoDataUrl;
-    if (!source) return;
+    if (!ocrSourceImage && !currentPhotoDataUrl) return;
     ocrBtn.disabled = true;
     var originalLabel = ocrBtn.textContent;
     ocrBtn.textContent = '読み取り中…(初回は時間がかかります)';
-    setStatus('写真から文字を読み取っています…');
+    setStatus('写真から文字を読み取っています…（30秒ほどかかることがあります）');
 
-    loadTesseract().then(function () {
-      return binarizeForOcr(source);
-    }).then(function (prepared) {
-      return Tesseract.recognize(prepared, 'jpn+eng', {
-        logger: function (m) {
-          if (m && m.status === 'recognizing text') {
-            ocrBtn.textContent = '読み取り中… ' + Math.round((m.progress || 0) * 100) + '%';
-          }
-        }
-      });
-    }).then(function (result) {
-      var rawText = (result && result.data && result.data.text) || '';
-      var parsed = parseCardText(rawText);
-      // 氏名・部署・役職は形の決まりがなく誤って拾いやすいので、はっきり読めた行だけから取る
-      var ocrLineList = result && result.data && result.data.lines;
-      if (ocrLineList && ocrLineList.length) {
-        var strict = parseCardText(ocrLineList.filter(function (l) { return l.confidence >= 60; })
-          .map(function (l) { return l.text; }).join('\n'));
-        parsed.name = strict.name;
-        parsed.department = strict.department;
-        parsed.title = strict.title;
-        parsed.nameCandidates = strict.nameCandidates;
-      }
-      var labels = { company: '会社名', name: '氏名', department: '部署', title: '役職', email: 'メールアドレス', phone: '電話番号' };
+    loadOcrSource().then(readCard).then(function (parsed) {
+      var labels = { company: '会社名', name: '氏名', department: '部署', title: '役職', email: 'メールアドレス', phone: '電話番号', address: '住所' };
       var filled = [];
       var missing = [];
       Object.keys(labels).forEach(function (f) {
@@ -1268,13 +1406,12 @@
         }
       });
 
-      ocrRawText.value = rawText.trim();
       showOcrLines(parsed.lines);
       ocrResultWrap.style.display = 'block';
-      ocrLinesDetails.open = missing.length > 0;
+      ocrLinesDetails.open = false;
       var hint = filled.length ? ('自動入力しました（色枠の項目）: ' + filled.join('・') + '。必ず名刺と見比べて確認してください。') : '自動入力できる項目は見つかりませんでした。';
-      if (missing.length) hint += ' 判別できなかった項目: ' + missing.join('・') + '（空欄のままです。下の読み取り行から割り当てるか、手入力してください）。';
-      if (parsed.nameCandidates.length > 1) hint += ' 氏名の候補が複数あったため、氏名は自動入力していません。';
+      if (missing.length) hint += ' 判別できなかった項目: ' + missing.join('・') + '（空欄のままです。手入力するか、下の「読み取った行」から割り当ててください）。';
+      if (parsed.nameCandidates.length > 1 && !parsed.name) hint += ' 氏名の候補が複数あったため、氏名は自動入力していません。';
       ocrResultHint.textContent = hint;
       setStatus(filled.length ? (filled.join('・') + 'を自動入力しました。内容を確認してください') : '文字は読み取れましたが、自動入力できる項目はありませんでした');
     }).catch(function (err) {
@@ -1306,7 +1443,7 @@
     clearNeedsCheck();
     editingId = null;
     currentPhotoDataUrl = '';
-    ocrSourceDataUrl = '';
+    ocrSourceImage = null;
     hidePhotoPreview();
     formTitle.textContent = '新しい名刺を追加';
     saveBtn.textContent = '保存する';
@@ -1318,7 +1455,7 @@
     clearNeedsCheck();
     editingId = card.id;
     currentPhotoDataUrl = card.photo || '';
-    ocrSourceDataUrl = '';
+    ocrSourceImage = null;
     if (currentPhotoDataUrl) showPhotoPreview(currentPhotoDataUrl); else hidePhotoPreview();
     formTitle.textContent = '名刺を編集';
     saveBtn.textContent = '更新する';
@@ -1556,7 +1693,7 @@
   });
 
   // 動作確認用（読み取りロジックだけを外から試せるようにしている）
-  window.meishiDebug = { parseCardText: parseCardText };
+  window.meishiDebug = { parseCardText: parseCardText, parseCardLines: parseCardLines };
 
   loadTemplate();
   init().then(function () {
