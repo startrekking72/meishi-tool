@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="format-detection" content="telephone=no">
+<title>西川 尚｜有限会社アークリー</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #faf6ee;
+    --panel: #ffffff;
+    --text: #24221f;
+    --sub: #7a756a;
+    --accent: #c2883f;
+    --accent-dark: #9c6c2f;
+    --border: #ece6d8;
+    --chip: #fbf4e6;
+    --shadow: 0 6px 24px rgba(60, 50, 20, 0.08), 0 1px 3px rgba(60, 50, 20, 0.06);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Hiragino Sans", "Yu Gothic", "Meiryo", -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  main {
+    max-width: 440px;
+    margin: 0 auto;
+    padding: calc(20px + env(safe-area-inset-top)) 16px calc(32px + env(safe-area-inset-bottom));
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 22px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow);
+  }
+  .company { font-size: 14px; color: var(--sub); margin: 0 0 14px; letter-spacing: 0.04em; }
+  .title { font-size: 13px; color: var(--accent-dark); margin: 0 0 4px; letter-spacing: 0.08em; }
+  h1 { font-size: 32px; font-weight: 700; margin: 0; letter-spacing: 0.08em; }
+  .tagline {
+    margin: 22px 0 0;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent-dark);
+    letter-spacing: 0.12em;
+  }
+  .activities { margin: 8px 0 0; font-size: 14px; line-height: 1.8; }
+  .contact-rows { margin: 18px 0 0; font-size: 14px; }
+  .contact-rows a { color: var(--text); overflow-wrap: anywhere; }
+  .contact-rows div { margin: 4px 0; display: flex; gap: 8px; }
+  .contact-rows .k { color: var(--sub); flex: 0 0 4em; }
+  .actions { display: flex; flex-direction: column; gap: 10px; }
+  .btn {
+    appearance: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 56px;
+    padding: 12px 16px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 700;
+    font-family: inherit;
+    text-decoration: none;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  .btn:active { transform: scale(0.98); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .hint { font-size: 12px; color: var(--sub); line-height: 1.6; margin: 8px 0 0; }
+  h2 { margin: 0 0 12px; font-size: 14px; color: var(--accent-dark); }
+  .share { text-align: center; padding: 22px; }
+  #qrCanvas { width: 220px; height: 220px; max-width: 100%; image-rendering: pixelated; }
+  .url { font-size: 12px; color: var(--sub); overflow-wrap: anywhere; margin: 10px 0 14px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <section class="panel">
+    <p class="company" id="pCompany"></p>
+    <p class="title" id="pTitle"></p>
+    <h1 id="pName"></h1>
+    <p class="tagline" id="pTagline"></p>
+    <p class="activities" id="pActivities"></p>
+    <div class="contact-rows" id="contactRows" hidden></div>
+  </section>
+
+  <div class="actions">
+    <a class="btn btn-primary" id="vcardBtn" href="nishikawa.vcf" download="nishikawa.vcf" type="text/vcard">連絡先に保存する</a>
+    <a class="btn" id="lineBtn" target="_blank" rel="noopener" hidden>LINE公式アカウント</a>
+    <a class="btn" id="profileBtn" target="_blank" rel="noopener" hidden>簡易プロフィール</a>
+    <a class="btn" id="detailBtn" target="_blank" rel="noopener" hidden>詳細プロフィール</a>
+  </div>
+  <p class="hint">「連絡先に保存する」を押すと連絡先ファイル（vCard）が開きます。iPhoneは表示された画面で「新規連絡先を作成」、Androidはダウンロードしたファイルを開いて保存してください。</p>
+
+  <section class="panel share" style="margin-top:20px;">
+    <h2>この名刺を共有</h2>
+    <canvas id="qrCanvas" width="220" height="220" aria-label="この名刺ページのQRコード"></canvas>
+    <div class="url" id="pageUrl"></div>
+    <button class="btn" id="shareBtn" type="button" style="width:100%;">URLを共有・コピー</button>
+  </section>
+</main>
+
+<script src="qrcode.js"></script>
+<script>
+(function () {
+  // 公開してよい情報だけをここに書く。空欄('')の項目はページに表示されない。
+  // 電話・メール・各リンクは本人が確認してから入れること。
+  // 変更したら連絡先ファイル nishikawa.vcf も同じ内容に合わせる。
+  var PROFILE = {
+    name: '西川 尚',
+    company: '有限会社アークリー',
+    title: '代表',
+    tagline: '不老死労',
+    activities: 'AI活用・出版・長寿社会への取り組み',
+    phone: '',
+    email: 'arcly4@gmail.com',
+    lineUrl: '',     // LINE公式アカウント
+    profileUrl: '',  // 簡易プロフィール
+    detailUrl: ''    // 詳細プロフィール
+  };
+
+  function setText(id, value) {
+    var el = document.getElementById(id);
+    el.textContent = value;
+    el.hidden = !value;
+  }
+  setText('pCompany', PROFILE.company);
+  setText('pTitle', PROFILE.title);
+  setText('pName', PROFILE.name);
+  setText('pTagline', PROFILE.tagline);
+  setText('pActivities', PROFILE.activities);
+
+  function isWebUrl(url) { return /^https:\/\//.test(url); }
+  function setLink(id, url) {
+    var el = document.getElementById(id);
+    if (!isWebUrl(url)) return;
+    el.href = url;
+    el.hidden = false;
+  }
+  setLink('lineBtn', PROFILE.lineUrl);
+  setLink('profileBtn', PROFILE.profileUrl);
+  setLink('detailBtn', PROFILE.detailUrl);
+
+  var rows = document.getElementById('contactRows');
+  function addContact(label, value, href) {
+    if (!value) return;
+    var row = document.createElement('div');
+    var k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = label;
+    var a = document.createElement('a');
+    a.href = href;
+    a.textContent = value;
+    row.appendChild(k);
+    row.appendChild(a);
+    rows.appendChild(row);
+    rows.hidden = false;
+  }
+  addContact('電話', PROFILE.phone, 'tel:' + PROFILE.phone.replace(/[^\d+]/g, ''));
+  addContact('メール', PROFILE.email, 'mailto:' + PROFILE.email);
+
+  // このページ自身のURLをQRコードにする
+  var pageUrl = location.origin + location.pathname;
+  document.getElementById('pageUrl').textContent = pageUrl;
+  var canvas = document.getElementById('qrCanvas');
+  if (typeof qrcode !== 'undefined') {
+    var qr = qrcode(0, 'M');
+    qr.addData(pageUrl);
+    qr.make();
+    var count = qr.getModuleCount();
+    var quiet = 4;
+    var cell = Math.max(4, Math.floor(880 / (count + quiet * 2)));
+    var size = cell * (count + quiet * 2);
+    canvas.width = size;
+    canvas.height = size;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#000000';
+    for (var r = 0; r < count; r++) {
+      for (var c = 0; c < count; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect((c + quiet) * cell, (r + quiet) * cell, cell, cell);
+      }
+    }
+  } else {
+    canvas.hidden = true;
+  }
+
+  var shareBtn = document.getElementById('shareBtn');
+  shareBtn.addEventListener('click', function () {
+    if (navigator.share) {
+      navigator.share({ title: document.title, url: pageUrl }).catch(function () { /* キャンセル時は何もしない */ });
+    } else if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(pageUrl).then(function () { shareBtn.textContent = 'URLをコピーしました'; });
+    } else {
+      prompt('このURLをコピーしてください', pageUrl);
+    }
+  });
+})();
+</script>
+</body>
+</html>

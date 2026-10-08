@@ -2,7 +2,10 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="名刺管理">
+<meta name="format-detection" content="telephone=no">
 <title>名刺管理ツール</title>
 <style>
   :root {
@@ -16,6 +19,7 @@
     --border: #ece6d8;
     --danger: #d3543a;
     --chip: #fbf4e6;
+    --ok: #3f8a5a;
     --shadow: 0 1px 3px rgba(60, 50, 20, 0.06), 0 1px 2px rgba(60, 50, 20, 0.04);
   }
   * { box-sizing: border-box; }
@@ -84,6 +88,7 @@
     outline: none;
   }
   input:focus, textarea:focus { border-color: var(--accent); }
+  input.needs-check { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(194, 136, 63, 0.25); }
   textarea { resize: vertical; min-height: 60px; line-height: 1.6; }
   .form-actions {
     display: flex;
@@ -106,14 +111,35 @@
     touch-action: manipulation;
   }
   button:active, .file-btn:active { transform: scale(0.98); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
   .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn-danger { color: var(--danger); border-color: var(--danger); }
   .btn-small { padding: 6px 10px; font-size: 12px; border-radius: 6px; }
   .file-btn input[type=file] { display: none; }
+  .btn-big { min-height: 60px; font-size: 18px; font-weight: 700; flex: 1 1 100%; justify-content: center; border-radius: 12px; }
+  .photo-row .file-btn { min-height: 48px; justify-content: center; flex: 1 1 auto; }
+  .photo-row .btn-big { min-height: 60px; flex: 1 1 100%; }
+  .main-actions {
+    position: sticky;
+    bottom: 0;
+    background: var(--panel);
+    padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
+    margin-bottom: -10px;
+    z-index: 2;
+  }
 
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
   .search-box { margin-bottom: 14px; }
   .search-box input { font-size: 16px; }
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text);
+    margin-top: 8px;
+  }
+  .check-row input { width: 18px; height: 18px; flex: 0 0 auto; }
 
   .card-list { display: flex; flex-direction: column; gap: 10px; }
   .card {
@@ -128,6 +154,7 @@
   .card-sub { font-size: 13px; color: var(--sub); margin: 0 0 8px; }
   .card-row { font-size: 13px; margin: 2px 0; display: flex; gap: 6px; }
   .card-row .k { color: var(--sub); flex: 0 0 auto; min-width: 4.5em; }
+  .card-row span:last-child { min-width: 0; overflow-wrap: anywhere; }
   .card-memo {
     margin-top: 8px;
     font-size: 13px;
@@ -142,6 +169,16 @@
     margin-top: 10px;
     justify-content: flex-end;
   }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--chip);
+    color: var(--sub);
+    margin-top: 6px;
+  }
+  .badge.done { background: #e8f3ec; color: var(--ok); }
   .empty {
     text-align: center;
     color: var(--sub);
@@ -154,12 +191,22 @@
   .photo-row { display: flex; gap: 8px; flex-wrap: wrap; }
   #photoPreviewWrap { margin-top: 10px; }
   #photoPreview {
-    max-width: 160px;
-    max-height: 160px;
+    max-width: 100%;
+    max-height: 220px;
     border-radius: 8px;
     border: 1px solid var(--border);
     display: block;
   }
+  .ocr-lines { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .ocr-line {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  .ocr-line-text { overflow-wrap: anywhere; margin-bottom: 4px; }
+  .ocr-assign { display: flex; flex-wrap: wrap; gap: 4px; }
+  .ocr-assign button { flex: 0 0 auto; padding: 4px 8px; font-size: 11px; border-radius: 6px; }
   .card-top { display: flex; gap: 10px; align-items: flex-start; }
   .card-headtext { flex: 1; min-width: 0; }
   .card-thumb {
@@ -230,12 +277,14 @@
     font-size: 16px;
     color: var(--accent-dark);
   }
+  .modal-box .field { margin-bottom: 10px; }
 
   @media (max-width: 560px) {
     .form-grid { grid-template-columns: 1fr; }
-    header { padding: 12px 12px 8px; }
+    header { padding: calc(12px + env(safe-area-inset-top)) 12px 8px; }
     main { padding: 10px 8px 30px; }
     button, .file-btn { flex: 1 1 auto; justify-content: center; }
+    .card-actions { flex-wrap: wrap; }
   }
 </style>
 </head>
@@ -246,9 +295,39 @@
 </header>
 
 <main>
+  <button type="button" class="btn-big" id="myCardBtn" style="width:100%; margin-bottom:14px;">自分の電子名刺（QRコード）を見せる</button>
+
   <section class="panel">
     <h2 id="formTitle">新しい名刺を追加</h2>
     <div class="form-grid">
+      <div class="field full">
+        <label>名刺の写真</label>
+        <div class="photo-row">
+          <label class="file-btn btn-primary btn-big" id="cameraLabel">
+            カメラで撮影
+            <input type="file" id="f_cameraInput" accept="image/*" capture="environment">
+          </label>
+          <label class="file-btn" id="photoLabel">
+            画像を選ぶ
+            <input type="file" id="f_photoInput" accept="image/*">
+          </label>
+          <button type="button" class="btn-small btn-danger" id="removePhotoBtn" style="display:none;">写真を削除</button>
+        </div>
+        <div id="photoPreviewWrap" style="display:none;">
+          <img id="photoPreview" alt="名刺の写真プレビュー">
+          <div class="photo-row" style="margin-top:8px;">
+            <button type="button" class="btn-primary" id="ocrBtn">写真から自動読み取り（OCR）</button>
+          </div>
+          <div id="ocrResultWrap" style="display:none;">
+            <div class="hint" id="ocrResultHint"></div>
+            <details style="margin-top:6px;" id="ocrLinesDetails">
+              <summary style="cursor:pointer; font-size:12px; color:var(--sub);">読み取った行を項目に割り当てる（手動修正用）</summary>
+              <div class="ocr-lines" id="ocrLines"></div>
+              <textarea id="ocrRawText" readonly rows="5" style="margin-top:8px;"></textarea>
+            </details>
+          </div>
+        </div>
+      </div>
       <div class="field">
         <label>氏名</label>
         <input type="text" id="f_name" placeholder="山田 太郎">
@@ -281,45 +360,42 @@
         <label>名刺交換日</label>
         <input type="date" id="f_metDate">
       </div>
+      <div class="field">
+        <label>交流会名</label>
+        <input type="text" id="f_eventName" list="eventNameList" placeholder="〇〇交流会">
+        <datalist id="eventNameList"></datalist>
+      </div>
       <div class="field full">
-        <label>メモ</label>
+        <label>会話メモ</label>
         <textarea id="f_memo" placeholder="話した内容や紹介経緯など"></textarea>
       </div>
-      <div class="field full">
-        <label>名刺の写真</label>
-        <div class="photo-row">
-          <label class="file-btn" id="photoLabel">
-            写真を撮る／選ぶ
-            <input type="file" id="f_photoInput" accept="image/*" capture="environment">
-          </label>
-          <button type="button" class="btn-small btn-danger" id="removePhotoBtn" style="display:none;">写真を削除</button>
-        </div>
-        <div id="photoPreviewWrap" style="display:none;">
-          <img id="photoPreview" alt="名刺の写真プレビュー">
-        </div>
-      </div>
     </div>
-    <div class="form-actions">
-      <button class="btn-primary" id="saveBtn">保存する</button>
+    <div class="form-actions main-actions">
+      <button class="btn-primary btn-big" id="saveBtn">保存する</button>
       <button id="cancelEditBtn" style="display:none;">編集をキャンセル</button>
     </div>
   </section>
 
   <div class="toolbar">
-    <button id="exportBtn">ファイルに書き出す</button>
+    <button id="exportBtn">JSONで書き出す（写真つき）</button>
+    <button id="exportCsvBtn">CSVで書き出す</button>
     <label class="file-btn" id="importLabel">
-      ファイルを読み込む
+      JSONを読み込む
       <input type="file" id="importInput" accept=".json,application/json">
     </label>
     <button class="btn-danger" id="clearBtn">全部消す</button>
   </div>
 
   <details class="panel details-panel">
-    <summary>挨拶メールのひな形を編集</summary>
+    <summary>お礼メールのひな形を編集</summary>
     <div class="form-grid" style="margin-top:12px;">
       <div class="field full">
-        <label>差出人名（自分の名前・会社名など）</label>
-        <input type="text" id="tpl_sender" placeholder="株式会社〇〇　山田 太郎">
+        <label>自分の名前（本文の名乗り用。空欄なら名乗りの行は入りません）</label>
+        <input type="text" id="tpl_myName" placeholder="山田 太郎">
+      </div>
+      <div class="field full">
+        <label>署名（メール末尾に入ります）</label>
+        <textarea id="tpl_sender" rows="3" placeholder="株式会社〇〇　山田 太郎"></textarea>
       </div>
       <div class="field full">
         <label>件名テンプレート</label>
@@ -327,19 +403,26 @@
       </div>
       <div class="field full">
         <label>本文テンプレート</label>
-        <textarea id="tpl_body" rows="8"></textarea>
+        <textarea id="tpl_body" rows="12"></textarea>
       </div>
     </div>
     <div class="form-actions">
       <button class="btn-primary" id="saveTemplateBtn">ひな形を保存</button>
+      <button id="resetTemplateBtn">初期のひな形に戻す</button>
     </div>
     <div class="hint">
-      使える差し込み文字：{name}氏名 {company}会社名 {department}部署 {title}役職 {phone}電話番号 {email}メール {address}住所 {metDate}交換日 {sender}差出人名
+      使える差し込み文字：{name}氏名 {company}会社名 {department}部署 {title}役職 {phone}電話番号 {email}メール {address}住所 {metDate}交換日 {metDateJp}交換日（〇月〇日） {eventName}交流会名 {memo}会話メモ {myName}自分の名前 {sender}署名<br>
+      {salutation}＝「氏名 様」（氏名が空なら「ご担当者様」）　{occasion}＝交換日と交流会名から作る書き出し（例：「10月9日の「〇〇交流会」では、」。どちらも空なら「先日は、」）<br>
+      [[ ]] で囲んだ部分は、中の差し込み文字が空欄のとき丸ごと省略されます（例：[[{company}の皆様]]）。
     </div>
   </details>
 
   <div class="search-box">
-    <input type="text" id="searchInput" placeholder="氏名・会社名・部署・役職・メモなどで検索">
+    <input type="text" id="searchInput" placeholder="氏名・会社名・役職・交流会名・メモなどで検索">
+    <label class="check-row">
+      <input type="checkbox" id="unsentOnly">
+      お礼メールの下書きをまだ開いていない名刺だけ表示
+    </label>
   </div>
 
   <div class="card-list" id="cardList"></div>
@@ -347,77 +430,144 @@
     <img id="lightboxImg" alt="名刺の写真（拡大）">
   </div>
 
+  <div id="myCardModal" class="modal-overlay">
+    <div class="modal-box" style="text-align:center;">
+      <h2>自分の電子名刺</h2>
+      <canvas id="myCardQr" width="260" height="260" style="width:260px; height:260px; max-width:100%; image-rendering:pixelated;" aria-label="電子名刺ページのQRコード"></canvas>
+      <div class="hint" id="myCardUrl" style="overflow-wrap:anywhere;"></div>
+      <div class="form-actions">
+        <a class="file-btn btn-primary" id="myCardOpen" target="_blank" rel="noopener" style="text-decoration:none;">公開ページを開く</a>
+        <button id="myCardCloseBtn">閉じる</button>
+      </div>
+      <div class="hint" style="text-align:left;">相手のスマホのカメラでこのQRコードを読み取ってもらうと、公開用の電子名刺ページが開きます。公開されるのは電子名刺ページの内容だけで、この端末に保存した名刺データ・写真・メモは含まれません。</div>
+    </div>
+  </div>
+
   <div id="mailModal" class="modal-overlay">
     <div class="modal-box">
-      <h2>挨拶メール</h2>
+      <h2>お礼メール</h2>
+      <div class="field full">
+        <label>宛先</label>
+        <input type="email" id="mailToOut" placeholder="example@example.com">
+      </div>
       <div class="field full">
         <label>件名</label>
         <input type="text" id="mailSubjectOut">
       </div>
       <div class="field full">
         <label>本文</label>
-        <textarea id="mailBodyOut" rows="10"></textarea>
+        <textarea id="mailBodyOut" rows="12"></textarea>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="mailConfirmChk">
+        宛先と本文を確認しました
+      </label>
+      <div class="form-actions">
+        <button class="btn-primary" id="mailOpenBtn" disabled>メールアプリで下書きを開く</button>
+        <button id="mailGmailBtn" disabled>Gmail（ブラウザ）で下書きを開く</button>
       </div>
       <div class="form-actions">
-        <button class="btn-primary" id="mailGmailBtn">Gmailで開く</button>
-        <button id="mailOpenBtn">他のメールアプリで開く</button>
+        <button id="mailSaveBtn">文面を保存</button>
+        <button id="mailRegenBtn">ひな形から作り直す</button>
         <button id="mailCopyBtn">本文をコピー</button>
         <button id="mailCloseBtn">閉じる</button>
       </div>
-      <div class="hint">宛先はカードのメールアドレスが自動で入ります。内容は送る前に自由に編集できます。「Gmailで開く」はブラウザでGmailの作成画面を開きます（要インターネット接続）。「他のメールアプリで開く」はパソコンに設定された既定のメールソフトを起動します。</div>
+      <div class="hint">このツールがメールを送信することはありません。「下書きを開く」を押すと、宛先・件名・本文が入った作成画面が開くだけです。送信はメールアプリ側でご自身の操作で行ってください。「メールアプリで下書きを開く」は端末の既定のメールアプリ、「Gmail（ブラウザ）」はブラウザ版Gmailの作成画面を開きます。</div>
     </div>
   </div>
   <div class="hint">
-    ・入力内容はこの端末のブラウザ内に自動保存されます（他のサイトやサーバーには送信されません）。<br>
+    ・入力内容と写真はこの端末のブラウザ内（IndexedDB）に保存されます（他のサイトやサーバーには送信されません）。ブラウザを閉じたり端末を再起動しても残ります。<br>
     ・写真は保存容量を圧迫しないよう自動で縮小・圧縮してから保存されます。<br>
-    ・別の端末（パソコンなど）に移したいときは「ファイルに書き出す」でバックアップファイルを保存し、移動先で「ファイルを読み込む」を使ってください（読み込みは追加されます）。データが増えてきたら、定期的にパソコンへ書き出しておくと安心です。
+    ・読み取りの精度を上げるには、名刺を画面いっぱいに、真上から、影や照り返しが入らないように撮ってください。<br>
+    ・「写真から自動読み取り(OCR)」は端末内(ブラウザ内)で処理され、写真そのものはどこにも送信されません。ただし読み取りエンジンの初回ダウンロードにインターネット接続が必要です。判別できなかった項目は空欄のままになります。読み取り精度は写真の鮮明さに左右されるため、結果は必ず確認してください。<br>
+    ・iPhoneでは、入力欄を長押し（またはタップ）して出るメニューの「テキストをスキャン」を使うと、カメラで名刺の文字を直接その欄に入力できます。自動読み取りがうまくいかない項目の修正に便利です。<br>
+    ・iPhoneで「JSONで書き出す」を押すと共有メニューが開きます。「“ファイル”に保存」を選ぶとバックアップできます。<br>
+    ・別の端末（パソコンなど）に移したいときは「JSONで書き出す」でバックアップファイルを保存し、移動先で「JSONを読み込む」を使ってください（読み込みは追加されます）。Excelなどで一覧を見たいときは「CSVで書き出す」を使ってください（CSVに写真は含まれません）。
   </div>
 </main>
 
 <footer>名刺データは端末のブラウザ内だけに保存されます。ブラウザのデータを消去すると内容も消えるため、大事なデータは定期的に書き出して保存してください。</footer>
 
+<script src="qrcode.js"></script>
 <script>
 (function () {
   var STORAGE_KEY = 'dejiina_meishi_tool_v1';
-  var TEMPLATE_KEY = 'dejiina_meishi_tool_v1_mailtemplate';
+  var LEGACY_TEMPLATE_KEY = 'dejiina_meishi_tool_v1_mailtemplate';
+  var TEMPLATE_KEY = 'dejiina_meishi_tool_v2_mailtemplate';
+  var MIGRATED_KEY = 'dejiina_meishi_tool_idb_migrated';
+  var LAST_EVENT_KEY = 'dejiina_meishi_tool_last_event';
+  var DB_NAME = 'dejiina_meishi_db';
+  var DB_VERSION = 1;
+  var STORE = 'cards';
+  var TESSERACT_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+
+  var db = null;
+  var useIdb = false;
   var cards = [];
   var editingId = null;
-  var mailTemplate = {
+  var DEFAULT_TEMPLATE = {
+    myName: '西川 尚',
     sender: 'Chatwork名：明日しよう\n氏名：西川 尚',
-    subject: 'ご挨拶（{company} {name}様）',
-    body: '{company}\n{name} 様\n\n先日は名刺交換をさせていただき、誠にありがとうございました。\n今後ともどうぞよろしくお願いいたします。\n\n{sender}'
+    subject: '名刺交換の御礼[[（{eventName}）]]',
+    body: '[[{company}\n]][[{title}　]]{salutation}\n\n' +
+      'お世話になっております。\n' +
+      '[[{myName}でございます。\n]]' +
+      '{occasion}名刺交換をさせていただき、誠にありがとうございました。\n\n' +
+      'お忙しい中お時間をいただき、お話しできましたことを大変嬉しく思っております。\n' +
+      '今後、何かお役に立てることがございましたら、どうぞお気軽にお声がけください。\n\n' +
+      'まずはメールにて御礼申し上げます。\n' +
+      '今後ともどうぞよろしくお願いいたします。\n\n' +
+      '{sender}'
   };
+  var mailTemplate = Object.assign({}, DEFAULT_TEMPLATE);
 
   var status = document.getElementById('status');
   var cardList = document.getElementById('cardList');
   var searchInput = document.getElementById('searchInput');
+  var unsentOnly = document.getElementById('unsentOnly');
   var formTitle = document.getElementById('formTitle');
   var saveBtn = document.getElementById('saveBtn');
   var cancelEditBtn = document.getElementById('cancelEditBtn');
   var exportBtn = document.getElementById('exportBtn');
+  var exportCsvBtn = document.getElementById('exportCsvBtn');
   var clearBtn = document.getElementById('clearBtn');
   var importInput = document.getElementById('importInput');
   var photoInput = document.getElementById('f_photoInput');
+  var cameraInput = document.getElementById('f_cameraInput');
   var removePhotoBtn = document.getElementById('removePhotoBtn');
   var photoPreviewWrap = document.getElementById('photoPreviewWrap');
   var photoPreview = document.getElementById('photoPreview');
+  var ocrBtn = document.getElementById('ocrBtn');
+  var ocrResultWrap = document.getElementById('ocrResultWrap');
+  var ocrResultHint = document.getElementById('ocrResultHint');
+  var ocrRawText = document.getElementById('ocrRawText');
+  var ocrLines = document.getElementById('ocrLines');
+  var ocrLinesDetails = document.getElementById('ocrLinesDetails');
+  var eventNameList = document.getElementById('eventNameList');
   var lightbox = document.getElementById('lightbox');
   var lightboxImg = document.getElementById('lightboxImg');
+  var tplMyName = document.getElementById('tpl_myName');
   var tplSender = document.getElementById('tpl_sender');
   var tplSubject = document.getElementById('tpl_subject');
   var tplBody = document.getElementById('tpl_body');
   var saveTemplateBtn = document.getElementById('saveTemplateBtn');
+  var resetTemplateBtn = document.getElementById('resetTemplateBtn');
   var mailModal = document.getElementById('mailModal');
+  var mailToOut = document.getElementById('mailToOut');
   var mailSubjectOut = document.getElementById('mailSubjectOut');
   var mailBodyOut = document.getElementById('mailBodyOut');
+  var mailConfirmChk = document.getElementById('mailConfirmChk');
   var mailOpenBtn = document.getElementById('mailOpenBtn');
   var mailGmailBtn = document.getElementById('mailGmailBtn');
+  var mailSaveBtn = document.getElementById('mailSaveBtn');
+  var mailRegenBtn = document.getElementById('mailRegenBtn');
   var mailCopyBtn = document.getElementById('mailCopyBtn');
   var mailCloseBtn = document.getElementById('mailCloseBtn');
   var currentMailCard = null;
 
-  var fields = ['name', 'company', 'department', 'title', 'phone', 'email', 'address', 'metDate', 'memo'];
+  var fields = ['name', 'company', 'department', 'title', 'phone', 'email', 'address', 'metDate', 'eventName', 'memo'];
   var currentPhotoDataUrl = '';
+  var ocrSourceDataUrl = '';
 
   function pad(n) { return String(n).padStart(2, '0'); }
   function formatNow() {
@@ -425,42 +575,143 @@
     return d.getFullYear() + '/' + pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + ' ' +
       pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
   }
+  function formatStamp(ms) {
+    if (!ms) return '';
+    var d = new Date(ms);
+    return d.getFullYear() + '/' + pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
   function setStatus(text) { status.textContent = text; }
+  function countStatus() { setStatus(cards.length + ' 件の名刺が保存されています'); }
   function newId() { return 'c_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9); }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+  function lsGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+  function lsSet(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* 保存できない環境では無視 */ } }
 
-  function load() {
-    try {
-      var raw = localStorage.getItem(STORAGE_KEY);
-      cards = raw ? JSON.parse(raw) : [];
-      if (!Array.isArray(cards)) cards = [];
-      setStatus(cards.length + ' 件の名刺が保存されています');
-    } catch (e) {
-      cards = [];
-      setStatus('この端末ではブラウザ保存が使えないため、内容は保存されません。');
-    }
+  // ---- 保存（IndexedDB。使えない環境だけ従来の localStorage に保存） ----
+  function openDb() {
+    return new Promise(function (resolve, reject) {
+      if (!window.indexedDB) { reject(new Error('IndexedDB非対応')); return; }
+      var req;
+      try { req = indexedDB.open(DB_NAME, DB_VERSION); } catch (e) { reject(e); return; }
+      req.onupgradeneeded = function () {
+        if (!req.result.objectStoreNames.contains(STORE)) {
+          req.result.createObjectStore(STORE, { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error || new Error('IndexedDBを開けません')); };
+    });
   }
 
+  function withStore(mode, work) {
+    return new Promise(function (resolve, reject) {
+      var result;
+      var t = db.transaction(STORE, mode);
+      t.oncomplete = function () { resolve(result); };
+      t.onerror = function () { reject(t.error || new Error('保存に失敗しました')); };
+      t.onabort = function () { reject(t.error || new Error('保存に失敗しました')); };
+      var req = work(t.objectStore(STORE));
+      if (req) req.onsuccess = function () { result = req.result; };
+    });
+  }
+
+  function readLegacyCards() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      var list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (e) { return []; }
+  }
+
+  function writeLocal(list) {
+    return new Promise(function (resolve, reject) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); resolve(); } catch (e) { reject(e); }
+    });
+  }
+
+  // 変更後の全件(nextCards)と、書き込む分(puts)・消す分(deletes)を受け取って保存する
+  function commit(nextCards, puts, deletes) {
+    if (!useIdb) return writeLocal(nextCards);
+    return withStore('readwrite', function (store) {
+      (deletes || []).forEach(function (id) { store.delete(id); });
+      (puts || []).forEach(function (c) { store.put(c); });
+    });
+  }
+
+  function saveFailed(err) {
+    console.error(err);
+    setStatus('保存できませんでした。保存容量がいっぱいの可能性があります。「JSONで書き出す」でバックアップし、不要な名刺を削除してからもう一度お試しください。');
+    alert('保存できませんでした。入力内容は画面に残っています。保存容量を確認してもう一度お試しください。');
+  }
+
+  function afterChange(message) {
+    setStatus((message || '保存しました') + '　' + formatNow() + '　(全' + cards.length + '件)');
+    render();
+  }
+
+  function init() {
+    return openDb().then(function (opened) {
+      db = opened;
+      useIdb = true;
+      return withStore('readonly', function (store) { return store.getAll(); });
+    }).then(function (list) {
+      cards = list || [];
+      // 旧バージョン(localStorage保存)のデータを初回だけ引き継ぐ
+      var legacy = readLegacyCards();
+      if (cards.length === 0 && legacy.length > 0 && !lsGet(MIGRATED_KEY)) {
+        legacy.forEach(function (c) { if (!c.id) c.id = newId(); });
+        return commit(legacy, legacy, []).then(function () {
+          cards = legacy;
+          lsSet(MIGRATED_KEY, '1');
+          setStatus('以前のデータ ' + cards.length + ' 件を引き継ぎました');
+        });
+      }
+      lsSet(MIGRATED_KEY, '1');
+      countStatus();
+    }).catch(function (err) {
+      console.error(err);
+      useIdb = false;
+      cards = readLegacyCards();
+      setStatus('このブラウザではIndexedDBが使えないため、簡易保存に切り替えています（' + cards.length + ' 件）。プライベートブラウズを解除すると安定して保存できます。');
+    }).then(function () {
+      if (navigator.storage && navigator.storage.persist) {
+        navigator.storage.persist().catch(function () { /* 許可されなくても動作は変わらない */ });
+      }
+    });
+  }
+
+  // ---- お礼メールのひな形 ----
   function loadTemplate() {
     try {
       var raw = localStorage.getItem(TEMPLATE_KEY);
       if (raw) {
         var saved = JSON.parse(raw);
+        mailTemplate.myName = typeof saved.myName === 'string' ? saved.myName : mailTemplate.myName;
         mailTemplate.sender = saved.sender || mailTemplate.sender;
         mailTemplate.subject = saved.subject || mailTemplate.subject;
         mailTemplate.body = saved.body || mailTemplate.body;
+      } else {
+        // 旧バージョンで設定した署名だけ引き継ぐ
+        var legacy = JSON.parse(localStorage.getItem(LEGACY_TEMPLATE_KEY) || 'null');
+        if (legacy && legacy.sender) mailTemplate.sender = legacy.sender;
       }
     } catch (e) { /* デフォルトのひな形を使う */ }
+    showTemplate();
+  }
+
+  function showTemplate() {
+    tplMyName.value = mailTemplate.myName;
     tplSender.value = mailTemplate.sender;
     tplSubject.value = mailTemplate.subject;
     tplBody.value = mailTemplate.body;
   }
 
   saveTemplateBtn.addEventListener('click', function () {
+    mailTemplate.myName = tplMyName.value.trim();
     mailTemplate.sender = tplSender.value;
     mailTemplate.subject = tplSubject.value;
     mailTemplate.body = tplBody.value;
@@ -472,17 +723,77 @@
     }
   });
 
+  resetTemplateBtn.addEventListener('click', function () {
+    if (!confirm('件名と本文のひな形を初期の文面に戻します（自分の名前と署名はそのまま）。「ひな形を保存」を押すまで保存はされません。')) return;
+    tplSubject.value = DEFAULT_TEMPLATE.subject;
+    tplBody.value = DEFAULT_TEMPLATE.body;
+  });
+
+  function metDateJp(metDate) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(metDate || '');
+    return m ? (Number(m[2]) + '月' + Number(m[3]) + '日') : '';
+  }
+
+  function templateValue(key, card) {
+    if (key === 'sender') return mailTemplate.sender || '';
+    if (key === 'myName') return mailTemplate.myName || '';
+    if (key === 'metDateJp') return metDateJp(card.metDate);
+    if (key === 'salutation') return card.name ? (card.name + ' 様') : 'ご担当者様';
+    if (key === 'occasion') {
+      var day = metDateJp(card.metDate);
+      if (day && card.eventName) return day + 'の「' + card.eventName + '」では、';
+      if (card.eventName) return '「' + card.eventName + '」では、';
+      if (day) return day + 'は、';
+      return '先日は、';
+    }
+    return card[key] || '';
+  }
+
+  var TOKEN_RE = /\{(name|company|department|title|phone|email|address|metDate|metDateJp|eventName|memo|myName|sender|salutation|occasion)\}/g;
+
   function fillTemplate(str, card) {
-    return str.replace(/\{(name|company|department|title|phone|email|address|metDate|sender)\}/g, function (m, key) {
-      if (key === 'sender') return mailTemplate.sender || '';
-      return card[key] || '';
+    // [[ ]] の中の差し込み文字がひとつでも空なら、その部分を丸ごと省く
+    var out = str.replace(/\[\[([\s\S]*?)\]\]/g, function (m, inner) {
+      var hasEmpty = false;
+      var filled = inner.replace(TOKEN_RE, function (mm, key) {
+        var v = templateValue(key, card);
+        if (!v) hasEmpty = true;
+        return v;
+      });
+      return hasEmpty ? '' : filled;
     });
+    out = out.replace(TOKEN_RE, function (m, key) { return templateValue(key, card); });
+    return out.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  // ---- お礼メール（下書きを開くだけ。このツールからの送信は行わない） ----
+  // 下書きの渡し先。将来 Gmail API での下書き作成などを追加する場合は、ここに
+  // { to, subject, body } を受け取る関数を足してボタンを結びつける。
+  var mailChannels = {
+    mailto: function (draft) {
+      window.location.href = 'mailto:' + encodeURIComponent(draft.to).replace(/%40/g, '@') +
+        '?subject=' + encodeURIComponent(draft.subject) +
+        '&body=' + encodeURIComponent(draft.body);
+    },
+    gmailWeb: function (draft) {
+      window.open('https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(draft.to) +
+        '&su=' + encodeURIComponent(draft.subject) +
+        '&body=' + encodeURIComponent(draft.body), '_blank');
+    }
+  };
+
+  function setMailConfirmed(checked) {
+    mailConfirmChk.checked = checked;
+    mailOpenBtn.disabled = !checked;
+    mailGmailBtn.disabled = !checked;
   }
 
   function openMailModal(card) {
     currentMailCard = card;
-    mailSubjectOut.value = fillTemplate(mailTemplate.subject, card);
-    mailBodyOut.value = fillTemplate(mailTemplate.body, card);
+    mailToOut.value = card.mailTo || card.email || '';
+    mailSubjectOut.value = card.mailSubject || fillTemplate(mailTemplate.subject, card);
+    mailBodyOut.value = card.mailBody || fillTemplate(mailTemplate.body, card);
+    setMailConfirmed(false);
     mailModal.classList.add('show');
   }
 
@@ -491,6 +802,51 @@
     currentMailCard = null;
   }
 
+  function saveMailDraft(extra, message) {
+    var card = currentMailCard;
+    if (!card) return Promise.resolve();
+    var updated = Object.assign({}, card, {
+      mailTo: mailToOut.value.trim(),
+      mailSubject: mailSubjectOut.value,
+      mailBody: mailBodyOut.value,
+      updatedAt: Date.now()
+    }, extra || {});
+    var next = cards.map(function (c) { return c.id === card.id ? updated : c; });
+    return commit(next, [updated], []).then(function () {
+      cards = next;
+      if (currentMailCard && currentMailCard.id === updated.id) currentMailCard = updated;
+      afterChange(message);
+    }).catch(saveFailed);
+  }
+
+  function openDraft(channel) {
+    if (!currentMailCard || !mailConfirmChk.checked) return;
+    var draft = { to: mailToOut.value.trim(), subject: mailSubjectOut.value, body: mailBodyOut.value };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.to)) {
+      alert('宛先のメールアドレスを確認してください。');
+      mailToOut.focus();
+      return;
+    }
+    // 画面がメールアプリに切り替わる前に保存を始めておく
+    saveMailDraft({ mailOpenedAt: Date.now() }, 'メールの下書きを開きました（送信はメールアプリで行ってください）');
+    mailChannels[channel](draft);
+  }
+
+  mailConfirmChk.addEventListener('change', function () { setMailConfirmed(mailConfirmChk.checked); });
+  // 確認後に内容を書き換えたら、もう一度確認してもらう
+  [mailToOut, mailSubjectOut, mailBodyOut].forEach(function (el) {
+    el.addEventListener('input', function () { setMailConfirmed(false); });
+  });
+  mailOpenBtn.addEventListener('click', function () { openDraft('mailto'); });
+  mailGmailBtn.addEventListener('click', function () { openDraft('gmailWeb'); });
+  mailSaveBtn.addEventListener('click', function () { saveMailDraft(null, 'メールの文面を保存しました'); });
+  mailRegenBtn.addEventListener('click', function () {
+    if (!currentMailCard) return;
+    if (!confirm('いまの件名と本文を、ひな形から作り直した文面で置き換えます。よろしいですか？')) return;
+    mailSubjectOut.value = fillTemplate(mailTemplate.subject, currentMailCard);
+    mailBodyOut.value = fillTemplate(mailTemplate.body, currentMailCard);
+    setMailConfirmed(false);
+  });
   mailCloseBtn.addEventListener('click', closeMailModal);
   mailModal.addEventListener('click', function (e) {
     if (e.target === mailModal) closeMailModal();
@@ -508,31 +864,49 @@
     }
   });
 
-  mailOpenBtn.addEventListener('click', function () {
-    var to = (currentMailCard && currentMailCard.email) ? currentMailCard.email : '';
-    var url = 'mailto:' + encodeURIComponent(to).replace(/%40/g, '@') +
-      '?subject=' + encodeURIComponent(mailSubjectOut.value) +
-      '&body=' + encodeURIComponent(mailBodyOut.value);
-    window.location.href = url;
-  });
+  // ---- 自分の電子名刺（公開ページ card.html へのQRコードを出すだけ。保存した名刺データは渡さない） ----
+  var myCardModal = document.getElementById('myCardModal');
+  var myCardUrl = new URL('card.html', location.href).href;
 
-  mailGmailBtn.addEventListener('click', function () {
-    var to = (currentMailCard && currentMailCard.email) ? currentMailCard.email : '';
-    var url = 'https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(to) +
-      '&su=' + encodeURIComponent(mailSubjectOut.value) +
-      '&body=' + encodeURIComponent(mailBodyOut.value);
-    window.open(url, '_blank');
-  });
-
-  function persist(message) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(cards));
-      setStatus((message || '保存しました') + '　' + formatNow() + '　(全' + cards.length + '件)');
-    } catch (e) {
-      setStatus('保存容量がいっぱいのため保存できませんでした。「ファイルに書き出す」でバックアップし、古いデータやPCに移した名刺を削除してから空き容量を作ってください。');
+  function drawQr(canvas, text) {
+    var qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    var count = qr.getModuleCount();
+    var quiet = 4;
+    var cell = Math.max(4, Math.floor(1040 / (count + quiet * 2)));
+    var size = cell * (count + quiet * 2);
+    canvas.width = size;
+    canvas.height = size;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#000000';
+    for (var r = 0; r < count; r++) {
+      for (var c = 0; c < count; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect((c + quiet) * cell, (r + quiet) * cell, cell, cell);
+      }
     }
   }
 
+  document.getElementById('myCardBtn').addEventListener('click', function () {
+    var canvas = document.getElementById('myCardQr');
+    document.getElementById('myCardUrl').textContent = myCardUrl;
+    document.getElementById('myCardOpen').href = myCardUrl;
+    if (typeof qrcode !== 'undefined') {
+      drawQr(canvas, myCardUrl);
+    } else {
+      canvas.style.display = 'none';
+      document.getElementById('myCardUrl').textContent = 'QRコードを作れませんでした。「公開ページを開く」から表示してください。 ' + myCardUrl;
+    }
+    myCardModal.classList.add('show');
+  });
+  document.getElementById('myCardCloseBtn').addEventListener('click', function () { myCardModal.classList.remove('show'); });
+  myCardModal.addEventListener('click', function (e) {
+    if (e.target === myCardModal) myCardModal.classList.remove('show');
+  });
+
+  // ---- 入力フォーム ----
   function getFormValues() {
     var v = {};
     fields.forEach(function (f) {
@@ -541,32 +915,36 @@
     return v;
   }
 
+  function clearNeedsCheck() {
+    fields.forEach(function (f) { document.getElementById('f_' + f).classList.remove('needs-check'); });
+  }
+
+  function resetOcrResult() {
+    ocrResultWrap.style.display = 'none';
+    ocrResultHint.textContent = '';
+    ocrRawText.value = '';
+    ocrLines.innerHTML = '';
+  }
+
   function showPhotoPreview(dataUrl) {
     photoPreview.src = dataUrl;
     photoPreviewWrap.style.display = 'block';
     removePhotoBtn.style.display = 'inline-flex';
+    resetOcrResult();
   }
 
   function hidePhotoPreview() {
-    photoPreview.src = '';
+    photoPreview.removeAttribute('src');
     photoPreviewWrap.style.display = 'none';
     removePhotoBtn.style.display = 'none';
+    resetOcrResult();
   }
 
-  function resizeImage(file, maxDim, quality, callback) {
+  function loadImage(file, callback) {
     var reader = new FileReader();
     reader.onload = function (e) {
       var img = new Image();
-      img.onload = function () {
-        var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-        var cw = Math.max(1, Math.round(img.width * scale));
-        var ch = Math.max(1, Math.round(img.height * scale));
-        var canvas = document.createElement('canvas');
-        canvas.width = cw;
-        canvas.height = ch;
-        canvas.getContext('2d').drawImage(img, 0, 0, cw, ch);
-        callback(canvas.toDataURL('image/jpeg', quality));
-      };
+      img.onload = function () { callback(img); };
       img.onerror = function () { callback(null); };
       img.src = e.target.result;
     };
@@ -574,18 +952,32 @@
     reader.readAsDataURL(file);
   }
 
-  photoInput.addEventListener('change', function (e) {
+  function drawResized(img, maxDim, quality) {
+    var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    var cw = Math.max(1, Math.round(img.width * scale));
+    var ch = Math.max(1, Math.round(img.height * scale));
+    var canvas = document.createElement('canvas');
+    canvas.width = cw;
+    canvas.height = ch;
+    canvas.getContext('2d').drawImage(img, 0, 0, cw, ch);
+    return canvas.toDataURL('image/jpeg', quality);
+  }
+
+  function onPhotoChosen(e) {
     var file = e.target.files && e.target.files[0];
+    e.target.value = '';
     if (!file) return;
     setStatus('写真を処理しています…');
-    resizeImage(file, 1280, 0.72, function (dataUrl) {
-      if (!dataUrl) {
+    loadImage(file, function (img) {
+      if (!img) {
         alert('写真の読み込みに失敗しました。');
-        setStatus(cards.length + ' 件の名刺が保存されています');
+        countStatus();
         return;
       }
-      currentPhotoDataUrl = dataUrl;
-      showPhotoPreview(dataUrl);
+      // 保存用は小さめ、文字読み取り用は細部が残るよう大きめにしておく
+      currentPhotoDataUrl = drawResized(img, 1280, 0.72);
+      ocrSourceDataUrl = drawResized(img, 2000, 0.9);
+      showPhotoPreview(currentPhotoDataUrl);
       var metDateField = document.getElementById('f_metDate');
       if (!metDateField.value) {
         var d = new Date();
@@ -593,12 +985,306 @@
       }
       setStatus('写真を追加しました（名刺交換日は今日の日付を自動入力。必要であれば手動で変更できます）');
     });
-  });
+  }
+
+  photoInput.addEventListener('change', onPhotoChosen);
+  cameraInput.addEventListener('change', onPhotoChosen);
 
   removePhotoBtn.addEventListener('click', function () {
     currentPhotoDataUrl = '';
-    photoInput.value = '';
+    ocrSourceDataUrl = '';
     hidePhotoPreview();
+  });
+
+  // ---- 名刺の文字読み取り（OCR） ----
+  var COMPANY_RE = /(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|NPO法人|特定非営利活動法人|社会福祉法人|医療法人|学校法人|税理士法人|弁護士法人|司法書士法人|行政書士法人|社会保険労務士法人|\(株\)|\(有\)|\(同\)|㈱|㈲|\bInc\b\.?|\bCo\.,?\s?Ltd\b\.?|\bCorp\b\.?|\bCorporation\b|\bLLC\b|\bK\.K\.)/i;
+  var TITLE_RE = /(代表取締役社長|代表取締役会長|代表取締役|代表社員|代表理事|取締役|執行役員|理事長|副社長|社長|会長|専務|常務|本部長|事業部長|副部長|部長|次長|課長|係長|主任|主査|室長|所長|支店長|店長|工場長|局長|院長|館長|園長|理事|監事|顧問|参与|代表|マネージャー|マネジャー|リーダー|ディレクター|プロデューサー|プランナー|エンジニア|デザイナー|コンサルタント|アドバイザー|コーディネーター|オーナー|店主|税理士|弁護士|司法書士|行政書士|社会保険労務士|公認会計士|中小企業診断士|\bCEO\b|\bCOO\b|\bCTO\b|\bCFO\b|\bCMO\b|\bManager\b|\bDirector\b|\bPresident\b)/i;
+  var ORG_WORD_RE = /(事業|営業|総務|経理|人事|開発|企画|管理|技術|製造|販売|広報|本部|支店|支社|本社|営業所|事務所|グループ|チーム|センター|研究|工場|担当|推進|戦略|統括|会社|法人)/;
+  var ADDRESS_RE = /(^(東京都|北海道|京都府|大阪府|.{2,3}県)|[都道府県].*[市区町村郡]|[市区町村]$|丁目|番地|ビル|〒)/;
+  var CJK = '\\u3040-\\u30ff\\u4e00-\\u9fff\\u3005';
+
+  function normalizeOcrText(str) {
+    return str
+      .replace(/[Ａ-Ｚａ-ｚ０-９]/g, function (s) { return String.fromCharCode(s.charCodeAt(0) - 0xFEE0); })
+      .replace(/＠/g, '@')
+      .replace(/．/g, '.')
+      .replace(/（/g, '(').replace(/）/g, ')')
+      .replace(/：/g, ':')
+      .replace(/＋/g, '+')
+      .replace(/　/g, ' ')
+      .replace(/(\d)\s*[－ー‐―─—–-]\s*(?=\d)/g, '$1-');
+  }
+
+  // OCRは日本語を1文字ずつ空白で区切ることがあるので、和文どうしの間の空白を詰める
+  function squeezeJa(line) {
+    return line.replace(new RegExp('([' + CJK + '])\\s+(?=[' + CJK + '])', 'g'), '$1').replace(/\s+/g, ' ').trim();
+  }
+
+  function isPersonName(compact) {
+    if (!/^[一-鿿々][一-鿿々ぁ-ゖァ-ヺー]{1,6}$/.test(compact)) return false;
+    return !COMPANY_RE.test(compact) && !TITLE_RE.test(compact) && !ORG_WORD_RE.test(compact) && !ADDRESS_RE.test(compact);
+  }
+
+  // 「山 田 太 郎」は詰め、「山田 太郎」は姓名の間の空白を残す
+  function formatName(text) {
+    var parts = text.trim().split(/\s+/);
+    return parts.length === 2 ? parts.join(' ') : parts.join('');
+  }
+
+  function extractEmail(lines) {
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].indexOf('@') === -1) continue;
+      var m = lines[i].replace(/\s*([@.])\s*/g, '$1').match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/);
+      if (m) return m[0].replace(/[.,;:]+$/, '');
+    }
+    return '';
+  }
+
+  function extractPhone(lines) {
+    var re = /(?:\+81[-\s]?\d{1,4}|\(?0\d{1,4}\)?)[-\s(]*\d{1,4}[-\s)]*\d{3,4}/g;
+    var labeled = '';
+    var plain = '';
+    lines.forEach(function (line) {
+      if (line.indexOf('@') !== -1 || /https?:|www\./i.test(line)) return;
+      // FAX番号を電話番号として拾わない
+      var seg = line.replace(/(FAX|F\s*A\s*X|ファ[ッツ]?クス)[\s\S]*$/i, '');
+      var found = seg.match(re) || [];
+      found.forEach(function (raw) {
+        var digits = raw.replace(/\D/g, '');
+        var ok = raw.charAt(0) === '+' ? (digits.length >= 11 && digits.length <= 12) : (digits.length === 10 || digits.length === 11);
+        if (!ok) return;
+        var value = raw.replace(/[()\s]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        if (!labeled && /(TEL|Tel|電話|携帯|Mobile|MOBILE|Phone|直通)/.test(seg)) labeled = value;
+        if (!plain) plain = value;
+      });
+    });
+    return labeled || plain;
+  }
+
+  var JA_FORM_RE = /(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|NPO法人|特定非営利活動法人|社会福祉法人|医療法人|学校法人|税理士法人|弁護士法人|司法書士法人|行政書士法人|社会保険労務士法人)/;
+
+  // 会社名の行に余計な文字が混ざっていても、法人格の付いたひとかたまりだけを取り出す
+  function pickCompany(tidy) {
+    var m = JA_FORM_RE.exec(tidy);
+    if (!m) return /\d{2,}/.test(tidy) ? '' : tidy;
+    var tokens = tidy.split(' ');
+    for (var i = 0; i < tokens.length; i++) {
+      if (tokens[i].indexOf(m[1]) === -1) continue;
+      if (tokens[i] !== m[1]) return tokens[i];
+      // 「株式会社 ABC」のように社名が離れている場合は、後ろに続く1語までを社名とする
+      return tokens[i + 1] ? (m[1] + ' ' + tokens[i + 1]) : '';
+    }
+    return '';
+  }
+
+  // 読み取った文字から各項目を取り出す。判別できない項目は空のまま返す（推測で埋めない）
+  function parseCardText(rawText) {
+    var lines = normalizeOcrText(rawText || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+    var out = { name: '', company: '', department: '', title: '', email: extractEmail(lines), phone: extractPhone(lines), lines: lines.map(squeezeJa) };
+    var nameCandidates = [];
+
+    function addName(text) {
+      var value = formatName(text);
+      if (nameCandidates.indexOf(value) === -1) nameCandidates.push(value);
+    }
+
+    lines.forEach(function (line) {
+      if (line.indexOf('@') !== -1 || /https?:|www\./i.test(line)) return;
+      var tidy = squeezeJa(line);
+      var compact = tidy.replace(/\s+/g, '');
+      if (COMPANY_RE.test(tidy)) {
+        if (!out.company) out.company = pickCompany(tidy);
+        return;
+      }
+      if (/\d/.test(compact)) return;
+      var tm = TITLE_RE.exec(tidy);
+      if (tm) {
+        // 「代表取締役 山田 太郎」のように役職と氏名が同じ行にある場合は分ける
+        var base = TITLE_RE.test(line) ? line : tidy;
+        var rest = base.slice(base.search(TITLE_RE)).replace(TITLE_RE, '').trim();
+        var head = base;
+        if (rest && isPersonName(rest.replace(/\s+/g, ''))) {
+          addName(rest);
+          head = base.slice(0, base.length - rest.length).trim();
+        }
+        if (!out.title && !/(電話|TEL)/i.test(head)) {
+          // 「営業部 部長」のように部署が前に付いている場合は部署と役職に分ける
+          var dm = /^(.*(?:部|課|室|局|グループ|チーム|センター|支店|支社))\s+(\S.*)$/.exec(head);
+          // OCRが空白を崩して「営業部部長」と続けて読んだ場合も同じように分ける
+          if (!dm || !TITLE_RE.test(dm[2])) {
+            dm = new RegExp('^(.{2,}(?:部|課|室|局))((?:' + TITLE_RE.source + ').*)$', 'i').exec(squeezeJa(head));
+          }
+          if (dm && TITLE_RE.test(dm[2])) {
+            out.department = squeezeJa(dm[1]);
+            out.title = squeezeJa(dm[2]);
+          } else {
+            out.title = squeezeJa(head);
+          }
+        }
+        return;
+      }
+      if (isPersonName(compact)) addName(line);
+    });
+
+    // 氏名らしい行が1つに絞れたときだけ入力する
+    if (nameCandidates.length === 1) out.name = nameCandidates[0];
+    out.nameCandidates = nameCandidates;
+    return out;
+  }
+
+  // 影・机の模様・箔押しなどで読み取りが崩れるのを減らすため、周囲の明るさを基準に白黒へ変換する
+  function binarizeForOcr(dataUrl) {
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onerror = function () { resolve(dataUrl); };
+      img.onload = function () {
+        try {
+          var W = img.width, H = img.height;
+          var canvas = document.createElement('canvas');
+          canvas.width = W;
+          canvas.height = H;
+          var ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          var d = ctx.getImageData(0, 0, W, H);
+          var px = d.data;
+          var gray = new Float32Array(W * H);
+          var integral = new Float64Array((W + 1) * (H + 1));
+          var x, y, i;
+          for (y = 0; y < H; y++) {
+            var rowSum = 0;
+            for (x = 0; x < W; x++) {
+              i = y * W + x;
+              gray[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+              rowSum += gray[i];
+              integral[(y + 1) * (W + 1) + x + 1] = integral[y * (W + 1) + x + 1] + rowSum;
+            }
+          }
+          var r = Math.round(Math.max(W, H) / 40);
+          for (y = 0; y < H; y++) {
+            var y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1);
+            for (x = 0; x < W; x++) {
+              var x0 = Math.max(0, x - r), x1 = Math.min(W, x + r + 1);
+              var sum = integral[y1 * (W + 1) + x1] - integral[y0 * (W + 1) + x1] - integral[y1 * (W + 1) + x0] + integral[y0 * (W + 1) + x0];
+              i = y * W + x;
+              var v = gray[i] < (sum / ((x1 - x0) * (y1 - y0))) * 0.82 ? 0 : 255;
+              px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v;
+            }
+          }
+          ctx.putImageData(d, 0, 0);
+          resolve(canvas.toDataURL('image/png'));
+        } catch (e) {
+          resolve(dataUrl);
+        }
+      };
+      img.src = dataUrl;
+    });
+  }
+
+  var tesseractLoading = null;
+  function loadTesseract() {
+    if (typeof Tesseract !== 'undefined') return Promise.resolve();
+    if (tesseractLoading) return tesseractLoading;
+    tesseractLoading = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = TESSERACT_URL;
+      s.onload = function () { resolve(); };
+      s.onerror = function () { tesseractLoading = null; s.remove(); reject(new Error('OCRエンジンを読み込めません')); };
+      document.head.appendChild(s);
+    });
+    return tesseractLoading;
+  }
+
+  var ASSIGN_TARGETS = [
+    ['name', '氏名'], ['company', '会社名'], ['department', '部署'], ['title', '役職'],
+    ['phone', '電話'], ['email', 'メール'], ['address', '住所'], ['memo', 'メモに追記']
+  ];
+
+  function showOcrLines(lines) {
+    ocrLines.innerHTML = lines.map(function (line, i) {
+      return '<div class="ocr-line" data-i="' + i + '"><div class="ocr-line-text">' + esc(line) + '</div><div class="ocr-assign">' +
+        ASSIGN_TARGETS.map(function (t) { return '<button type="button" data-f="' + t[0] + '">' + t[1] + '</button>'; }).join('') +
+        '</div></div>';
+    }).join('');
+    ocrLines._lines = lines;
+  }
+
+  ocrLines.addEventListener('click', function (e) {
+    var f = e.target.getAttribute('data-f');
+    var row = e.target.closest('.ocr-line');
+    if (!f || !row) return;
+    var text = ocrLines._lines[Number(row.getAttribute('data-i'))];
+    var input = document.getElementById('f_' + f);
+    if (f === 'memo') {
+      input.value = input.value ? (input.value.replace(/\s+$/, '') + '\n' + text) : text;
+    } else {
+      input.value = text;
+      input.classList.remove('needs-check');
+    }
+    setStatus('「' + text + '」を' + e.target.textContent + 'に入れました');
+  });
+
+  ocrBtn.addEventListener('click', function () {
+    var source = ocrSourceDataUrl || currentPhotoDataUrl;
+    if (!source) return;
+    ocrBtn.disabled = true;
+    var originalLabel = ocrBtn.textContent;
+    ocrBtn.textContent = '読み取り中…(初回は時間がかかります)';
+    setStatus('写真から文字を読み取っています…');
+
+    loadTesseract().then(function () {
+      return binarizeForOcr(source);
+    }).then(function (prepared) {
+      return Tesseract.recognize(prepared, 'jpn+eng', {
+        logger: function (m) {
+          if (m && m.status === 'recognizing text') {
+            ocrBtn.textContent = '読み取り中… ' + Math.round((m.progress || 0) * 100) + '%';
+          }
+        }
+      });
+    }).then(function (result) {
+      var rawText = (result && result.data && result.data.text) || '';
+      var parsed = parseCardText(rawText);
+      // 氏名・部署・役職は形の決まりがなく誤って拾いやすいので、はっきり読めた行だけから取る
+      var ocrLineList = result && result.data && result.data.lines;
+      if (ocrLineList && ocrLineList.length) {
+        var strict = parseCardText(ocrLineList.filter(function (l) { return l.confidence >= 60; })
+          .map(function (l) { return l.text; }).join('\n'));
+        parsed.name = strict.name;
+        parsed.department = strict.department;
+        parsed.title = strict.title;
+        parsed.nameCandidates = strict.nameCandidates;
+      }
+      var labels = { company: '会社名', name: '氏名', department: '部署', title: '役職', email: 'メールアドレス', phone: '電話番号' };
+      var filled = [];
+      var missing = [];
+      Object.keys(labels).forEach(function (f) {
+        var input = document.getElementById('f_' + f);
+        if (parsed[f] && !input.value) {
+          input.value = parsed[f];
+          input.classList.add('needs-check');
+          filled.push(labels[f]);
+        } else if (!input.value && f !== 'department') {
+          missing.push(labels[f]);
+        }
+      });
+
+      ocrRawText.value = rawText.trim();
+      showOcrLines(parsed.lines);
+      ocrResultWrap.style.display = 'block';
+      ocrLinesDetails.open = missing.length > 0;
+      var hint = filled.length ? ('自動入力しました（色枠の項目）: ' + filled.join('・') + '。必ず名刺と見比べて確認してください。') : '自動入力できる項目は見つかりませんでした。';
+      if (missing.length) hint += ' 判別できなかった項目: ' + missing.join('・') + '（空欄のままです。下の読み取り行から割り当てるか、手入力してください）。';
+      if (parsed.nameCandidates.length > 1) hint += ' 氏名の候補が複数あったため、氏名は自動入力していません。';
+      ocrResultHint.textContent = hint;
+      setStatus(filled.length ? (filled.join('・') + 'を自動入力しました。内容を確認してください') : '文字は読み取れましたが、自動入力できる項目はありませんでした');
+    }).catch(function (err) {
+      console.error(err);
+      alert('文字の読み取りに失敗しました。インターネット接続と写真の写りを確認するか、手入力してください。（写真はそのまま保存できます）');
+      countStatus();
+    }).finally(function () {
+      ocrBtn.disabled = false;
+      ocrBtn.textContent = originalLabel;
+    });
   });
 
   cardList.addEventListener('click', function (e) {
@@ -610,14 +1296,17 @@
 
   lightbox.addEventListener('click', function () {
     lightbox.classList.remove('show');
-    lightboxImg.src = '';
+    lightboxImg.removeAttribute('src');
   });
 
   function clearForm() {
     fields.forEach(function (f) { document.getElementById('f_' + f).value = ''; });
+    // 同じ交流会で続けて登録しやすいよう、直前の交流会名を入れておく
+    document.getElementById('f_eventName').value = lsGet(LAST_EVENT_KEY) || '';
+    clearNeedsCheck();
     editingId = null;
     currentPhotoDataUrl = '';
-    photoInput.value = '';
+    ocrSourceDataUrl = '';
     hidePhotoPreview();
     formTitle.textContent = '新しい名刺を追加';
     saveBtn.textContent = '保存する';
@@ -626,9 +1315,10 @@
 
   function fillForm(card) {
     fields.forEach(function (f) { document.getElementById('f_' + f).value = card[f] || ''; });
+    clearNeedsCheck();
     editingId = card.id;
     currentPhotoDataUrl = card.photo || '';
-    photoInput.value = '';
+    ocrSourceDataUrl = '';
     if (currentPhotoDataUrl) showPhotoPreview(currentPhotoDataUrl); else hidePhotoPreview();
     formTitle.textContent = '名刺を編集';
     saveBtn.textContent = '更新する';
@@ -636,6 +1326,7 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  // ---- 一覧 ----
   function render() {
     var keyword = searchInput.value.trim().toLowerCase();
     var list = cards.slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
@@ -644,8 +1335,16 @@
         return fields.some(function (f) { return (c[f] || '').toLowerCase().indexOf(keyword) !== -1; });
       });
     }
+    if (unsentOnly.checked) {
+      list = list.filter(function (c) { return !c.mailOpenedAt; });
+    }
+
+    var events = [];
+    cards.forEach(function (c) { if (c.eventName && events.indexOf(c.eventName) === -1) events.push(c.eventName); });
+    eventNameList.innerHTML = events.map(function (n) { return '<option value="' + esc(n) + '">'; }).join('');
+
     if (list.length === 0) {
-      cardList.innerHTML = '<div class="empty">' + (cards.length === 0 ? 'まだ名刺が登録されていません。上のフォームから追加してください。' : '検索条件に一致する名刺がありません。') + '</div>';
+      cardList.innerHTML = '<div class="empty">' + (cards.length === 0 ? 'まだ名刺が登録されていません。上のフォームから追加してください。' : '条件に一致する名刺がありません。') + '</div>';
       return;
     }
     cardList.innerHTML = list.map(function (c) {
@@ -655,8 +1354,12 @@
       if (c.email) rows += '<div class="card-row"><span class="k">メール</span><span>' + esc(c.email) + '</span></div>';
       if (c.address) rows += '<div class="card-row"><span class="k">住所</span><span>' + esc(c.address) + '</span></div>';
       if (c.metDate) rows += '<div class="card-row"><span class="k">交換日</span><span>' + esc(c.metDate) + '</span></div>';
+      if (c.eventName) rows += '<div class="card-row"><span class="k">交流会</span><span>' + esc(c.eventName) + '</span></div>';
       var memo = c.memo ? '<div class="card-memo">' + esc(c.memo) + '</div>' : '';
-      var thumb = c.photo ? '<img class="card-thumb" src="' + c.photo + '" alt="' + esc(c.name || '名刺') + 'の写真">' : '';
+      var thumb = c.photo ? '<img class="card-thumb" src="' + esc(c.photo) + '" alt="' + esc(c.name || '名刺') + 'の写真">' : '';
+      var badge = c.mailOpenedAt
+        ? '<span class="badge done">お礼メール下書き済み ' + esc(formatStamp(c.mailOpenedAt)) + '</span>'
+        : (c.mailBody ? '<span class="badge">お礼メール文面を保存済み（未作成）</span>' : '');
       return '<div class="card" data-id="' + esc(c.id) + '">' +
         '<div class="card-top">' +
         thumb +
@@ -664,9 +1367,9 @@
         '<div class="card-name">' + esc(c.name || '（氏名未入力）') + '</div>' +
         (subParts ? '<div class="card-sub">' + esc(subParts) + '</div>' : '') +
         '</div></div>' +
-        rows + memo +
+        rows + memo + badge +
         '<div class="card-actions">' +
-        '<button class="btn-small mail-btn">挨拶メールを作成</button>' +
+        '<button class="btn-small mail-btn">お礼メールを作成</button>' +
         '<button class="btn-small edit-btn">編集</button>' +
         '<button class="btn-small btn-danger delete-btn">削除</button>' +
         '</div></div>';
@@ -685,10 +1388,12 @@
       fillForm(card);
     } else if (e.target.classList.contains('delete-btn')) {
       if (confirm((card.name || 'この名刺') + ' を削除します。よろしいですか？')) {
-        cards = cards.filter(function (c) { return c.id !== id; });
-        if (editingId === id) clearForm();
-        persist('削除しました');
-        render();
+        var next = cards.filter(function (c) { return c.id !== id; });
+        commit(next, [], [id]).then(function () {
+          cards = next;
+          if (editingId === id) clearForm();
+          afterChange('削除しました');
+        }).catch(saveFailed);
       }
     }
   });
@@ -696,45 +1401,75 @@
   saveBtn.addEventListener('click', function () {
     var v = getFormValues();
     v.photo = currentPhotoDataUrl;
-    if (!v.name && !v.company) {
-      alert('氏名または会社名のどちらかは入力してください。');
+    if (!v.name && !v.company && !v.photo) {
+      alert('氏名・会社名・写真のいずれかは入力してください。');
       return;
     }
     var now = Date.now();
-    if (editingId) {
-      var idx = cards.findIndex(function (c) { return c.id === editingId; });
-      if (idx !== -1) {
-        cards[idx] = Object.assign({}, cards[idx], v, { updatedAt: now });
-      }
-      persist('更新しました');
+    var card;
+    var next;
+    var message;
+    var existing = editingId ? cards.find(function (c) { return c.id === editingId; }) : null;
+    if (existing) {
+      card = Object.assign({}, existing, v, { updatedAt: now });
+      next = cards.map(function (c) { return c.id === card.id ? card : c; });
+      message = '更新しました';
     } else {
-      v.id = newId();
-      v.createdAt = now;
-      v.updatedAt = now;
-      cards.push(v);
-      persist('追加しました');
+      card = Object.assign(v, { id: newId(), createdAt: now, updatedAt: now });
+      next = cards.concat([card]);
+      message = '追加しました';
     }
-    clearForm();
-    render();
+    saveBtn.disabled = true;
+    commit(next, [card], []).then(function () {
+      cards = next;
+      lsSet(LAST_EVENT_KEY, v.eventName);
+      clearForm();
+      afterChange(message);
+    }).catch(saveFailed).then(function () { saveBtn.disabled = false; });
   });
 
   cancelEditBtn.addEventListener('click', clearForm);
   searchInput.addEventListener('input', render);
+  unsentOnly.addEventListener('change', render);
 
   clearBtn.addEventListener('click', function () {
     if (cards.length === 0) return;
     if (!confirm('登録されている名刺データをすべて削除します。よろしいですか？')) return;
-    cards = [];
-    clearForm();
-    persist('全て削除しました');
-    render();
+    var ids = cards.map(function (c) { return c.id; });
+    commit([], [], ids).then(function () {
+      cards = [];
+      try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* 旧データが残っていなければ何もしない */ }
+      clearForm();
+      afterChange('全て削除しました');
+    }).catch(saveFailed);
   });
 
-  exportBtn.addEventListener('click', function () {
+  // ---- 書き出し・読み込み ----
+  function fileStamp() {
     var d = new Date();
-    var filename = 'meishi_' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) +
-      '_' + pad(d.getHours()) + pad(d.getMinutes()) + '.json';
-    var blob = new Blob([JSON.stringify(cards, null, 2)], { type: 'application/json' });
+    return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' + pad(d.getHours()) + pad(d.getMinutes());
+  }
+
+  var isIos = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  function download(filename, content, type) {
+    var blob = new Blob(content, { type: type });
+    // iPhoneではダウンロードが分かりにくいので、共有メニューから「ファイルに保存」できるようにする
+    if (isIos && window.File && navigator.canShare) {
+      var file = new File([blob], filename, { type: type.split(';')[0] });
+      if (navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file] }).then(function () {
+          setStatus('書き出しました：' + filename);
+        }).catch(function (err) {
+          if (!err || err.name !== 'AbortError') saveAsLink(blob, filename);
+        });
+        return;
+      }
+    }
+    saveAsLink(blob, filename);
+  }
+
+  function saveAsLink(blob, filename) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
@@ -744,6 +1479,33 @@
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
     setStatus('ファイルに書き出しました：' + filename);
+  }
+
+  exportBtn.addEventListener('click', function () {
+    download('meishi_' + fileStamp() + '.json', [JSON.stringify(cards, null, 2)], 'application/json');
+  });
+
+  function csvCell(value) {
+    var s = String(value == null ? '' : value);
+    // 表計算ソフトで数式として実行されないようにする
+    if (/^[=@]/.test(s)) s = "'" + s;
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+
+  exportCsvBtn.addEventListener('click', function () {
+    var columns = [
+      ['氏名', 'name'], ['会社名', 'company'], ['部署', 'department'], ['役職', 'title'],
+      ['電話番号', 'phone'], ['メールアドレス', 'email'], ['住所', 'address'],
+      ['名刺交換日', 'metDate'], ['交流会名', 'eventName'], ['会話メモ', 'memo']
+    ];
+    var header = columns.map(function (c) { return csvCell(c[0]); }).concat([csvCell('お礼メール下書き日時'), csvCell('登録日時'), csvCell('更新日時')]);
+    var rows = cards.slice().sort(function (a, b) { return (a.createdAt || 0) - (b.createdAt || 0); }).map(function (card) {
+      return columns.map(function (c) { return csvCell(card[c[1]]); })
+        .concat([csvCell(formatStamp(card.mailOpenedAt)), csvCell(formatStamp(card.createdAt)), csvCell(formatStamp(card.updatedAt))])
+        .join(',');
+    });
+    // 先頭のBOMはExcelで文字化けさせないためのもの
+    download('meishi_' + fileStamp() + '.csv', ['﻿' + [header.join(',')].concat(rows).join('\r\n') + '\r\n'], 'text/csv;charset=utf-8');
   });
 
   importInput.addEventListener('change', function (e) {
@@ -756,9 +1518,9 @@
         if (!Array.isArray(data)) throw new Error('形式が正しくありません');
         var count = data.length;
         if (!confirm(count + ' 件の名刺データを読み込みます。現在のデータに追加されます。よろしいですか？')) return;
-        data.forEach(function (item) {
-          var now = Date.now();
-          cards.push({
+        var now = Date.now();
+        var added = data.map(function (item) {
+          return {
             id: newId(),
             name: item.name || '',
             company: item.company || '',
@@ -768,14 +1530,22 @@
             email: item.email || '',
             address: item.address || '',
             metDate: item.metDate || '',
+            eventName: item.eventName || '',
             memo: item.memo || '',
             photo: item.photo || '',
+            mailTo: item.mailTo || '',
+            mailSubject: item.mailSubject || '',
+            mailBody: item.mailBody || '',
+            mailOpenedAt: item.mailOpenedAt || 0,
             createdAt: item.createdAt || now,
             updatedAt: now
-          });
+          };
         });
-        persist('読み込みました（' + count + '件追加）');
-        render();
+        var next = cards.concat(added);
+        commit(next, added, []).then(function () {
+          cards = next;
+          afterChange('読み込みました（' + count + '件追加）');
+        }).catch(saveFailed);
       } catch (err) {
         alert('ファイルの読み込みに失敗しました。正しいバックアップファイルか確認してください。');
       }
@@ -785,9 +1555,14 @@
     importInput.value = '';
   });
 
-  load();
+  // 動作確認用（読み取りロジックだけを外から試せるようにしている）
+  window.meishiDebug = { parseCardText: parseCardText };
+
   loadTemplate();
-  render();
+  init().then(function () {
+    clearForm();
+    render();
+  });
 })();
 </script>
 </body>
