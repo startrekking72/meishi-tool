@@ -1,0 +1,4 @@
+# GitHub Pages（Jekyll）の設定。
+# tests フォルダはリポジトリには置くが、公開サイトには含めない。
+exclude:
+  - tests

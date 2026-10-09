@@ -350,6 +350,9 @@
             <div class="ocr-lines" id="ocrCandidates"></div>
             <details style="margin-top:6px;" id="ocrLinesDetails">
               <summary style="cursor:pointer; font-size:12px; color:var(--sub);">読み取った行を見る・項目に割り当てる</summary>
+              <label class="check-row"><input type="checkbox" id="ocrMergeSimilar" checked> 似た行をまとめる</label>
+              <label class="check-row"><input type="checkbox" id="ocrHideUsed" checked> 入力済みの項目に使った行を隠す</label>
+              <div class="hint" id="ocrLinesNote"></div>
               <div class="ocr-lines" id="ocrLines"></div>
             </details>
           </div>
@@ -605,6 +608,9 @@
   var ocrLines = document.getElementById('ocrLines');
   var ocrCandidates = document.getElementById('ocrCandidates');
   var ocrLinesDetails = document.getElementById('ocrLinesDetails');
+  var ocrMergeSimilar = document.getElementById('ocrMergeSimilar');
+  var ocrHideUsed = document.getElementById('ocrHideUsed');
+  var ocrLinesNote = document.getElementById('ocrLinesNote');
   var eventNameList = document.getElementById('eventNameList');
   var lightbox = document.getElementById('lightbox');
   var lightboxImg = document.getElementById('lightboxImg');
@@ -985,6 +991,8 @@
   // 手で直した項目は確認済みとして色枠を外す
   fields.forEach(function (f) {
     document.getElementById('f_' + f).addEventListener('input', function (e) { e.target.classList.remove('needs-check', 'ocr-filled'); });
+    // 手で直したあとも、入力済みの項目に使った行の表示を合わせる
+    document.getElementById('f_' + f).addEventListener('change', function () { renderOcrLines(); });
   });
 
   function clearNeedsCheck() {
@@ -995,6 +1003,9 @@
     ocrResultWrap.style.display = 'none';
     ocrResultHint.textContent = '';
     ocrLines.innerHTML = '';
+    ocrLines._raw = null;
+    ocrLines._passes = null;
+    ocrLinesNote.textContent = '';
     ocrCandidates.innerHTML = '';
   }
 
@@ -1156,11 +1167,29 @@
     var tokens = tidy.split(' ');
     for (var i = 0; i < tokens.length; i++) {
       if (tokens[i].indexOf(m[1]) === -1) continue;
-      if (tokens[i] !== m[1]) return tokens[i];
-      // 「株式会社 ABC」のように社名が離れている場合は、後ろに続く1語までを社名とする
-      return tokens[i + 1] ? (m[1] + ' ' + tokens[i + 1]) : '';
+      var from = i, to = i;
+      if (tokens[i] === m[1]) {
+        // 法人格だけが離れている場合。後ろに社名らしい語があれば「株式会社 ABC」、なければ前の語を社名とする「ABC 株式会社」
+        if (isCompanyWord(tokens[i + 1])) to = i + 1;
+        else if (isCompanyWord(tokens[i - 1])) from = i - 1;
+        else return '';
+      }
+      // 英字の社名は「ABC Works」のように複数の語に分かれるので、英字の語が続くあいだは社名に含める
+      while (/[A-Za-z.]$/.test(tokens[to]) && isLatinWord(tokens[to + 1])) to++;
+      while (/^[A-Za-z]/.test(tokens[from]) && isLatinWord(tokens[from - 1])) from--;
+      return tokens.slice(from, to + 1).join(' ');
     }
     return '';
+  }
+
+  // 見出し（TELなど）・役職・部署・数字で始まる語は社名の一部にしない
+  var NOT_COMPANY_WORD_RE = /^(TEL|FAX|URL|E-?mail|Mail|Mobile|Cell|https?|www)\b/i;
+  function isCompanyWord(token) {
+    return !!token && !/^\d/.test(token) && !NOT_COMPANY_WORD_RE.test(token) && !TITLE_RE.test(token) &&
+      !/(部|課|室|局|支店|支社|営業所)$/.test(token);
+  }
+  function isLatinWord(token) {
+    return !!token && /^[A-Za-z][A-Za-z&.'\-]*$/.test(token) && isCompanyWord(token);
   }
 
   // 記号や1文字だけの行など、文字として意味を成さない読み取り結果を除く
@@ -1197,7 +1226,10 @@
       }
       if (!/\d/.test(addr)) continue;
       // 番地の後ろは、建物名らしい3文字以上のまとまりだけ残し、1〜2文字の読み違いは落とす
-      var tail = /^([\s\S]*\d[\d\-.]*(?:[F階号]|号室)?)([\s\S]*)$/.exec(addr);
+      // 括弧の内側は「( 5 階 )」のように空白が入って読まれることがあるので、括弧の際と数字の後ろの空白を詰める
+      addr = addr.replace(/\(([^()]*)\)/g, function (all, inner) { return '(' + inner.trim().replace(/(\d)\s+(?=[F階号])/g, '$1') + ')'; });
+      // 「ビル(5階)」のように括弧で終わる場合は、閉じ括弧までを残す
+      var tail = /^([\s\S]*\d[\d\-.]*(?:[F階号]|号室)?\)?)([\s\S]*)$/.exec(addr);
       var extra = tail[2].trim();
       addr = tail[1] + (extra.replace(/\s+/g, '').length >= 3 ? ' ' + extra : '');
       // 番地の区切りを点と読み違えることがあるので、数字の間の点はハイフンに直す
@@ -1312,7 +1344,8 @@
     var named = nameCandidates.filter(function (c) { return !bodyHeight || c.h >= bodyHeight * 1.15; })
       .sort(function (a, b) { return b.h - a.h; });
     if (named.length === 1 || (named.length > 1 && named[0].h >= named[1].h * 1.25)) out.name = named[0].value;
-    out.nameCandidates = nameCandidates.map(function (c) { return c.value; });
+    // 候補は文字の大きい順に並べる（選んでもらうときに、氏名らしいものが先に来る）
+    out.nameCandidates = nameCandidates.slice().sort(function (a, b) { return b.h - a.h; }).map(function (c) { return c.value; });
     ['name', 'company', 'department', 'title', 'address'].forEach(function (f) { out[f] = trimJunk(out[f]); });
     return out;
   }
@@ -1699,13 +1732,19 @@
   // 同じ項目を、前処理の違う画像ごとに読んだ結果を突き合わせる。readings は { value, source } の並び。
   // 別々の画像（source）2つ以上で読めて、読めた結果がすべて同じだったものだけを確定する。同じ画像を読み方だけ変えた
   // 結果どうしの一致は、同じ読み違いを繰り返しやすいので数えない。それ以外は確定せず、読めた結果を候補として返す（多く読めた順）
-  function voteReadings(readings, mergeTruncated) {
+  // opts.keyOf は「同じ読み」とみなすための見比べ用の形を作る関数、opts.better(a, b) は同じ読みのうち a の書き方を残したいときに真を返す関数
+  function voteReadings(readings, opts) {
+    if (opts === true) opts = { mergeTruncated: true };
+    opts = opts || {};
+    var mergeTruncated = !!opts.mergeTruncated;
+    var keyOf = opts.keyOf || plainKey;
     var groups = [];
     readings.forEach(function (r) {
       if (!r.value) return;
-      var key = r.value.replace(/\s+/g, '').toLowerCase();
+      var key = keyOf(r.value);
       var hit = groups.filter(function (g) { return g.key === key; })[0];
       if (!hit) { hit = { key: key, value: r.value, sources: [] }; groups.push(hit); }
+      else if (opts.better && opts.better(r.value, hit.value)) hit.value = r.value;
       if (hit.sources.indexOf(r.source) === -1) hit.sources.push(r.source);
     });
     if (mergeTruncated) {
@@ -1725,6 +1764,207 @@
     if (groups.length === 1 && groups[0].sources.length >= 2) return { value: groups[0].value, candidates: [] };
     groups.sort(function (p, q) { return q.sources.length - p.sources.length; });
     return { value: '', candidates: groups.slice(0, 3).map(function (g) { return g.value; }) };
+  }
+
+  function plainKey(value) { return value.replace(/\s+/g, '').toLowerCase(); }
+
+  // 電話番号は数字だけで見比べる（「0312345678」と「03-1234-5678」は同じ番号）。+81 で始まる書き方は 0 始まりにそろえる
+  function phoneKey(value) {
+    var digits = value.replace(/\D/g, '');
+    return value.trim().charAt(0) === '+' && digits.indexOf('81') === 0 ? '0' + digits.slice(2) : digits;
+  }
+  // 画面に出すのは読み取れた書き方のまま。区切りのある書き方が読めていればそちらを残し、こちらで区切り位置を作ることはしない
+  function moreSeparated(a, b) {
+    // +81 の書き方と 0 始まりの書き方が混ざったときは、先に読めた方をそのまま使う
+    if ((a.trim().charAt(0) === '+') !== (b.trim().charAt(0) === '+')) return false;
+    return (a.match(/-/g) || []).length > (b.match(/-/g) || []).length;
+  }
+  function hasInnerSpace(a, b) { return /\s/.test(a.trim()) && !/\s/.test(b.trim()); }
+
+  function splitAddress(value) {
+    var m = /^〒\s*(\d{3}-\d{4})\s*/.exec(value);
+    var body = m ? value.slice(m[0].length) : value;
+    return { postal: m ? m[1] : '', body: body, key: plainKey(body) };
+  }
+  function joinAddress(postal, body) { return (postal ? '〒' + postal + ' ' : '') + body; }
+
+  // 片方がもう片方の書き出しと同じで、違いが後ろに付いた建物名だけなら同じ住所とみなす。
+  // 番地の続き（1-2 と 1-2-3、1 と 1丁目2）で違う場合は別の住所かもしれないので、同じとはみなさない
+  function sameAddressBody(a, b) {
+    var s = a.key.length <= b.key.length ? a : b, l = s === a ? b : a;
+    if (l.key.indexOf(s.key) !== 0) return false;
+    return !/^([\d\-.]|丁目|番|号|の|ノ)/.test(l.key.slice(s.key.length));
+  }
+
+  // 住所は、郵便番号や建物名が読めたかどうかだけの違いで候補が割れないようにする。
+  // 確定するのは別々の画像2つ以上で読めた部分まで。1つの画像でしか読めなかった郵便番号・建物名は、より詳しい読みとして候補に出す
+  function decideAddress(readings) {
+    var variants = [];
+    var postals = [];
+    readings.forEach(function (r) {
+      if (!r.value) return;
+      var a = splitAddress(r.value);
+      var hit = variants.filter(function (v) { return v.key === a.key; })[0];
+      if (!hit) { hit = { key: a.key, body: a.body, sources: [] }; variants.push(hit); }
+      if (hit.sources.indexOf(r.source) === -1) hit.sources.push(r.source);
+      if (!a.postal) return;
+      var p = postals.filter(function (o) { return o.postal === a.postal; })[0];
+      if (!p) { p = { postal: a.postal, sources: [] }; postals.push(p); }
+      if (p.sources.indexOf(r.source) === -1) p.sources.push(r.source);
+    });
+    // 郵便番号の読みが食い違っているときは、まとめずに読めたままを候補にする
+    if (postals.length > 1) return voteReadings(readings);
+    var postal = postals.length ? postals[0] : null;
+    variants.sort(function (p, q) { return q.key.length - p.key.length; });
+    // 互いに同じ住所とみなせるものどうしをまとめる
+    var clusters = [];
+    variants.forEach(function (v) {
+      var homes = clusters.filter(function (c) { return c.every(function (o) { return sameAddressBody(o, v); }); });
+      if (homes.length) homes.forEach(function (c) { c.push(v); }); else clusters.push([v]);
+    });
+    function sourcesOf(list) {
+      var all = [];
+      list.forEach(function (v) { v.sources.forEach(function (s) { if (all.indexOf(s) === -1) all.push(s); }); });
+      return all;
+    }
+    if (clusters.length !== 1) {
+      clusters.sort(function (p, q) { return sourcesOf(q).length - sourcesOf(p).length; });
+      return { value: '', candidates: clusters.slice(0, 3).map(function (c) { return joinAddress(postal ? postal.postal : '', c[0].body); }) };
+    }
+    var cluster = clusters[0];
+    var fullest = joinAddress(postal ? postal.postal : '', cluster[0].body);
+    if (sourcesOf(cluster).length < 2) return { value: '', candidates: [fullest] };
+    // 長い読みから順に見て、その読み（またはそれを含むもっと長い読み）が2つ以上の画像で読めているところまでを確定する
+    var agreed = cluster.filter(function (v, i) { return sourcesOf(cluster.slice(0, i + 1)).length >= 2; })[0];
+    var value = joinAddress(postal && postal.sources.length >= 2 ? postal.postal : '', agreed.body);
+    return { value: value, candidates: fullest === value ? [] : [fullest] };
+  }
+
+  function decideField(f, readings) {
+    if (f === 'address') return decideAddress(readings);
+    if (f === 'phone' || f === 'mobile') return voteReadings(readings, { keyOf: phoneKey, better: moreSeparated });
+    if (f === 'name') return voteReadings(readings, { better: hasInnerSpace });
+    return voteReadings(readings, { mergeTruncated: f === 'email' });
+  }
+
+  // 氏名が1つに決まらなかったとき、氏名らしい行を候補として並べる。first は読み方が分かれた氏名（先に出す）。
+  // lists は読み取りごとの候補（大きい順）。多くの読み取りに出てきたものを先にする
+  function mergeNameCandidates(lists, first) {
+    var entries = [];
+    function add(value, rank, fixed) {
+      var key = plainKey(value);
+      var hit = entries.filter(function (e) { return e.key === key; })[0];
+      if (!hit) { hit = { key: key, value: value, count: 0, rank: rank, fixed: fixed }; entries.push(hit); }
+      else if (hasInnerSpace(value, hit.value)) hit.value = value;
+      hit.count++;
+      hit.rank = Math.min(hit.rank, rank);
+    }
+    (first || []).forEach(function (value, i) { add(value, i, true); });
+    lists.forEach(function (list) { list.forEach(function (value, i) { add(value, i, false); }); });
+    entries.sort(function (p, q) {
+      if (p.fixed !== q.fixed) return p.fixed ? -1 : 1;
+      if (p.fixed) return p.rank - q.rank;
+      return (q.count - p.count) || (p.rank - q.rank);
+    });
+    return entries.slice(0, 5).map(function (e) { return e.value; });
+  }
+
+  // 3回の読み取り結果（parses）をまとめて、確定した項目・候補・読み取った行を返す
+  function combinePasses(parses, rereads, quarter) {
+    var sources = ['sharp', 'soft', 'bold'];
+    // linePasses は読み取りごとの行をそのまま残したもの（整理して表示するときも、元の読み取り結果は失わない）
+    var result = { candidates: {}, quarter: quarter, lines: [], linePasses: parses.map(function (parsed) { return parsed.lines.slice(); }) };
+    OCR_FIELDS.forEach(function (f) {
+      var readings = parses.map(function (parsed, i) { return { value: parsed[f], source: sources[i] }; });
+      // メールは、同じ画像の読み直し結果も同じ source の読みとして加える
+      if (f === 'email') (rereads || []).forEach(function (email, i) { readings.push({ value: email, source: sources[i] }); });
+      var decided = decideField(f, readings);
+      result[f] = decided.value;
+      if (decided.candidates.length) result.candidates[f] = decided.candidates;
+    });
+    if (!result.name) {
+      var names = mergeNameCandidates(parses.map(function (parsed) { return parsed.nameCandidates || []; }), result.candidates.name);
+      if (names.length) result.candidates.name = names;
+    }
+    parses.forEach(function (parsed) {
+      parsed.lines.forEach(function (line) {
+        var key = line.replace(/\s+/g, '');
+        if (!result.lines.some(function (l) { return l.replace(/\s+/g, '') === key; })) result.lines.push(line);
+      });
+    });
+    return result;
+  }
+
+  // ---- 読み取った行の一覧を整理する（表示だけを整理し、元の行は残す） ----
+  var LINE_KEEP = '0-9a-z@' + CJK;
+  // 行どうしを見比べるための形。数字の区切り（1-2-3）は意味があるので残す
+  function lineKey(text) { return text.toLowerCase().replace(new RegExp('[^' + LINE_KEEP + '\\-]', 'g'), ''); }
+  // 項目の値と見比べるための形。区切りの書き方の違い（03-1234 と 03(1234)）を無視する
+  function looseKey(text) { return text.toLowerCase().replace(new RegExp('[^' + LINE_KEEP + ']', 'g'), ''); }
+
+  function editDistance(a, b) {
+    var prev = [], cur = [], i, j;
+    for (j = 0; j <= b.length; j++) prev[j] = j;
+    for (i = 1; i <= a.length; i++) {
+      cur = [i];
+      for (j = 1; j <= b.length; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1));
+      }
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+
+  // 同じ行を読み方だけ変えて読んだ結果とみなせるか。数字が違う行（別の番号・別の番地）と、メールアドレスの読み違いはまとめない
+  function similarLines(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    var s = a.length <= b.length ? a : b, l = s === a ? b : a;
+    if (s.length < 4) return false;
+    // 端の1〜2文字が欠けただけの読み
+    if (l.indexOf(s) !== -1 && l.length - s.length <= 2) return true;
+    if (l.indexOf('@') !== -1 || s.length < 5 || s.replace(/\D/g, '') !== l.replace(/\D/g, '')) return false;
+    return l.length - s.length <= 2 && editDistance(s, l) <= (s.length >= 12 ? 2 : 1);
+  }
+
+  // lines は重なりを除いた行、passes は読み取りごとの行。似た行をひとまとめにし、代表の行（text）とまとめた行すべて（variants）を返す
+  function organizeLines(lines, passes) {
+    var clusters = [];
+    lines.forEach(function (text) {
+      var exact = text.replace(/\s+/g, '');
+      var item = {
+        text: text,
+        key: lineKey(text),
+        count: (passes || []).filter(function (pass) { return pass.some(function (t) { return t.replace(/\s+/g, '') === exact; }); }).length
+      };
+      var home = clusters.filter(function (c) { return c.some(function (o) { return similarLines(o.key, item.key); }); })[0];
+      if (home) home.push(item); else clusters.push([item]);
+    });
+    return clusters.map(function (c) {
+      // 多くの読み取りに出てきた行を代表にする。ただし、それを含むもっと長い読みがあれば、欠けていない方を代表にする
+      var best = c.slice().sort(function (p, q) { return (q.count - p.count) || (q.key.length - p.key.length); })[0];
+      c.forEach(function (o) { if (o.key.length > best.key.length && o.key.indexOf(best.key) !== -1) best = o; });
+      return { text: best.text, variants: c.map(function (o) { return o.text; }) };
+    });
+  }
+
+  var USED_FIELDS = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address'];
+  var USED_LABEL_RE = /(tel|phone|mobile|cell|e-?mail|mail|電話|携帯|〒)/g;
+
+  // 行の中身が、すでに入力欄に入っている内容だけでできているか（見出しの「TEL」などは除いて考える）
+  function isLineUsed(text, values) {
+    var key = looseKey(text);
+    if (key.length < 2) return false;
+    var rest = key;
+    var hit = false;
+    USED_FIELDS.forEach(function (f) {
+      var v = looseKey(values[f] || '');
+      if (v.length < 2) return;
+      // 行が項目の値の一部になっている（住所の1行目だけ、など）
+      if (v === key || (key.length >= 4 && v.indexOf(key) !== -1)) { hit = true; rest = ''; return; }
+      if (rest.indexOf(v) !== -1) { hit = true; rest = rest.split(v).join(''); }
+    });
+    return hit && rest.replace(USED_LABEL_RE, '').length <= 1;
   }
 
   var OCR_FIELDS = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address'];
@@ -1788,24 +2028,7 @@
         return chain.then(function () { return rereadEmailLine(shots[i], lines); }).then(function (email) { rereads.push(email); });
       }, Promise.resolve()).then(function () { return rereads; });
     }).then(function (rereads) {
-      var parses = passes.map(function (lines) { return parseCardLines(toItems(lines)); });
-      var result = { candidates: {}, quarter: quarter, lines: [] };
-      OCR_FIELDS.forEach(function (f) {
-        var sources = ['sharp', 'soft', 'bold'];
-        var readings = parses.map(function (parsed, i) { return { value: parsed[f], source: sources[i] }; });
-        // メールは、同じ画像の読み直し結果も同じ source の読みとして加える
-        if (f === 'email') rereads.forEach(function (email, i) { readings.push({ value: email, source: sources[i] }); });
-        var decided = voteReadings(readings, f === 'email');
-        result[f] = decided.value;
-        if (decided.candidates.length) result.candidates[f] = decided.candidates;
-      });
-      parses.forEach(function (parsed) {
-        parsed.lines.forEach(function (line) {
-          var key = line.replace(/\s+/g, '');
-          if (!result.lines.some(function (l) { return l.replace(/\s+/g, '') === key; })) result.lines.push(line);
-        });
-      });
-      return result;
+      return combinePasses(passes.map(function (lines) { return parseCardLines(toItems(lines)); }), rereads, quarter);
     });
   }
 
@@ -1814,14 +2037,41 @@
     ['phone', '電話'], ['mobile', '携帯'], ['email', 'メール'], ['address', '住所'], ['memo', 'メモに追記']
   ];
 
-  function showOcrLines(lines) {
-    ocrLines.innerHTML = lines.length ? lines.map(function (line, i) {
-      return '<div class="ocr-line" data-i="' + i + '"><div class="ocr-line-text">' + esc(line) + '</div><div class="ocr-assign">' +
+  // lines は読み取った行（重なりを除いたもの）、passes は読み取りごとの行。どちらも元のまま持っておき、表示のときだけ整理する
+  function showOcrLines(lines, passes) {
+    ocrLines._raw = lines;
+    ocrLines._passes = passes || [];
+    renderOcrLines();
+  }
+
+  function renderOcrLines() {
+    var raw = ocrLines._raw;
+    if (!raw) return;
+    var entries = ocrMergeSimilar.checked ? organizeLines(raw, ocrLines._passes)
+      : raw.map(function (line) { return { text: line, variants: [line] }; });
+    var merged = raw.length - entries.length;
+    var values = getFormValues();
+    var shown = ocrHideUsed.checked ? entries.filter(function (en) {
+      return !en.variants.some(function (line) { return isLineUsed(line, values); });
+    }) : entries;
+    var hidden = entries.length - shown.length;
+    var notes = [];
+    if (merged) notes.push('似た行 ' + merged + ' 行をまとめました');
+    if (hidden) notes.push('入力済みの項目に使った ' + hidden + ' 行を隠しています');
+    ocrLinesNote.textContent = notes.length ? (notes.join('。') + '。上のチェックを外すと、すべての行を表示します。') : '';
+    ocrLines.innerHTML = shown.length ? shown.map(function (en, i) {
+      var others = en.variants.filter(function (line) { return line !== en.text; });
+      return '<div class="ocr-line" data-i="' + i + '"><div class="ocr-line-text">' + esc(en.text) + '</div>' +
+        (others.length ? '<div class="hint" style="margin:0 0 4px;">ほかの読み: ' + others.map(esc).join(' ／ ') + '</div>' : '') +
+        '<div class="ocr-assign">' +
         ASSIGN_TARGETS.map(function (t) { return '<button type="button" data-f="' + t[0] + '">' + t[1] + '</button>'; }).join('') +
         '</div></div>';
-    }).join('') : '<div class="hint">はっきり読み取れた行はありませんでした。</div>';
-    ocrLines._lines = lines;
+    }).join('') : '<div class="hint">' + (raw.length ? '表示する行はありません。' : 'はっきり読み取れた行はありませんでした。') + '</div>';
+    ocrLines._lines = shown.map(function (en) { return en.text; });
   }
+
+  ocrMergeSimilar.addEventListener('change', renderOcrLines);
+  ocrHideUsed.addEventListener('change', renderOcrLines);
 
   ocrLines.addEventListener('click', function (e) {
     var f = e.target.getAttribute('data-f');
@@ -1836,12 +2086,16 @@
       input.classList.remove('needs-check', 'ocr-filled');
     }
     setStatus('「' + text + '」を' + e.target.textContent + 'に入れました');
+    renderOcrLines();
   });
 
   // 読み方が分かれた項目は自動で入れず、候補として並べて選んでもらう
   function showOcrCandidates(parsed) {
     ocrCandidates.innerHTML = OCR_FIELDS.filter(function (f) { return parsed.candidates[f]; }).map(function (f) {
-      return '<div class="ocr-line"><div class="ocr-line-text">' + OCR_LABELS[f] + 'の候補（名刺と合うものをタップ。入力後に手で直せます）</div><div class="ocr-assign">' +
+      // 自動入力した項目にも、1つの画像でだけもっと詳しく読めた結果（住所の郵便番号・建物名）があれば並べる
+      var note = parsed[f] ? 'のより詳しい読み取り結果（1つの読み方でだけ、より長く読めたもの。名刺と合えばタップ）'
+        : 'の候補（名刺と合うものをタップ。入力後に手で直せます）';
+      return '<div class="ocr-line"><div class="ocr-line-text">' + OCR_LABELS[f] + note + '</div><div class="ocr-assign">' +
         parsed.candidates[f].map(function (v) { return '<button type="button" data-f="' + f + '" data-v="' + esc(v) + '">' + esc(v) + '</button>'; }).join('') +
         '</div></div>';
     }).join('');
@@ -1855,6 +2109,7 @@
     // 利用者が選んだ値なので、強調を外して手入力と同じ扱いにする
     input.classList.remove('needs-check', 'ocr-filled');
     setStatus(OCR_LABELS[f] + 'に候補を入力しました。違うところがあれば手で直してください');
+    renderOcrLines();
   });
 
   // ---- 四隅を合わせる台形補正（斜めに撮れた名刺を、正面から見た形に直す） ----
@@ -2039,7 +2294,7 @@
         }
       });
 
-      showOcrLines(parsed.lines);
+      showOcrLines(parsed.lines, parsed.linePasses);
       showOcrCandidates(parsed);
       ocrResultWrap.style.display = 'block';
       ocrLinesDetails.open = false;
@@ -2406,7 +2661,10 @@
   });
 
   // 動作確認用（読み取りロジックだけを外から試せるようにしている）
-  window.meishiDebug = { parseCardText: parseCardText, parseCardLines: parseCardLines, warpQuad: warpQuad };
+  window.meishiDebug = {
+    parseCardText: parseCardText, parseCardLines: parseCardLines, warpQuad: warpQuad,
+    combinePasses: combinePasses, decideField: decideField, organizeLines: organizeLines, isLineUsed: isLineUsed, pickCompany: pickCompany
+  };
 
   loadTemplate();
   init().then(function () {
