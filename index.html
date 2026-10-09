@@ -89,6 +89,7 @@
   }
   input:focus, textarea:focus { border-color: var(--accent); }
   input.needs-check { border-color: var(--danger); box-shadow: 0 0 0 2px rgba(211, 84, 58, 0.22); }
+  input.has-candidates { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(194, 136, 63, 0.22); }
   textarea { resize: vertical; min-height: 60px; line-height: 1.6; }
   .form-actions {
     display: flex;
@@ -408,6 +409,7 @@
       <button class="btn-primary btn-big" id="saveBtn">保存する</button>
       <button id="cancelEditBtn" style="display:none;">編集をキャンセル</button>
     </div>
+    <div class="hint">氏名・会社名・写真のどれか1つがあれば保存できます。部署・役職・電話番号・メールアドレス・住所・交流会名・会話メモは、名刺に書かれていなければ空欄のままで構いません。</div>
   </section>
 
   <div class="toolbar">
@@ -499,7 +501,7 @@
   <div id="confirmModal" class="modal-overlay">
     <div class="modal-box">
       <h2>保存前の確認</h2>
-      <div class="hint" style="margin:0 0 10px;">自動読み取りの結果には誤りが含まれることがあります。名刺と見比べて確認してください。</div>
+      <div class="hint" style="margin:0 0 10px;">自動読み取りの結果には誤りが含まれることがあります。名刺と見比べて確認してください。空欄の項目は、名刺に書かれていなければそのままで保存できます。</div>
       <div id="confirmList"></div>
       <div class="form-actions">
         <button class="btn-primary btn-big" id="confirmSaveBtn">確認したので保存する</button>
@@ -990,13 +992,13 @@
 
   // 手で直した項目は確認済みとして色枠を外す
   fields.forEach(function (f) {
-    document.getElementById('f_' + f).addEventListener('input', function (e) { e.target.classList.remove('needs-check', 'ocr-filled'); });
+    document.getElementById('f_' + f).addEventListener('input', function (e) { e.target.classList.remove('needs-check', 'has-candidates', 'ocr-filled'); });
     // 手で直したあとも、入力済みの項目に使った行の表示を合わせる
     document.getElementById('f_' + f).addEventListener('change', function () { renderOcrLines(); });
   });
 
   function clearNeedsCheck() {
-    fields.forEach(function (f) { document.getElementById('f_' + f).classList.remove('needs-check', 'ocr-filled'); });
+    fields.forEach(function (f) { document.getElementById('f_' + f).classList.remove('needs-check', 'has-candidates', 'ocr-filled'); });
   }
 
   function resetOcrResult() {
@@ -2083,7 +2085,7 @@
       input.value = input.value ? (input.value.replace(/\s+$/, '') + '\n' + text) : text;
     } else {
       input.value = text;
-      input.classList.remove('needs-check', 'ocr-filled');
+      input.classList.remove('needs-check', 'has-candidates', 'ocr-filled');
     }
     setStatus('「' + text + '」を' + e.target.textContent + 'に入れました');
     renderOcrLines();
@@ -2107,7 +2109,7 @@
     var input = document.getElementById('f_' + f);
     input.value = e.target.getAttribute('data-v');
     // 利用者が選んだ値なので、強調を外して手入力と同じ扱いにする
-    input.classList.remove('needs-check', 'ocr-filled');
+    input.classList.remove('needs-check', 'has-candidates', 'ocr-filled');
     setStatus(OCR_LABELS[f] + 'に候補を入力しました。違うところがあれば手で直してください');
     renderOcrLines();
   });
@@ -2255,6 +2257,59 @@
     img.src = source;
   }
 
+  // 読み取り結果を入力欄に入れる。氏名・会社名・メールは読めなかったときに赤枠で知らせるが、それ以外の項目は
+  // 名刺に書かれていないことも多いので、候補があるときだけ茶色の枠にして、空欄でも誤りに見えないようにする
+  var KEY_OCR_FIELDS = ['name', 'company', 'email'];
+  function applyOcrResult(parsed) {
+    ocrUsed = true;
+    if (parsed.quarter) uprightPhoto(parsed.quarter);
+    var labels = OCR_LABELS;
+    var filled = [];
+    var missing = [];
+    var optional = [];
+    var kept = [];
+    OCR_FIELDS.forEach(function (f) {
+      var input = document.getElementById('f_' + f);
+      // 手で入力・修正した項目は触らない。空欄と、前回の自動入力のままの項目だけ入れる
+      var replaceable = !input.value || input.classList.contains('ocr-filled');
+      input.classList.remove('needs-check', 'has-candidates');
+      if (parsed[f] && replaceable) {
+        input.value = parsed[f];
+        input.classList.add('ocr-filled');
+        // 一致して読めた場合でも同じ読み違いが重なることがあるので、メールは必ず見比べてもらう
+        if (f === 'email') input.classList.add('needs-check');
+        filled.push(labels[f]);
+      } else if (parsed.candidates[f] && replaceable) {
+        // 読み方が分かれた項目は空欄にして、ここだけ目立たせる
+        input.value = '';
+        input.classList.remove('ocr-filled');
+        if (KEY_OCR_FIELDS.indexOf(f) !== -1) { input.classList.add('needs-check'); missing.push(labels[f]); }
+        else { input.classList.add('has-candidates'); optional.push(labels[f]); }
+      } else if (!input.value && KEY_OCR_FIELDS.indexOf(f) !== -1) {
+        input.classList.add('needs-check');
+        missing.push(labels[f]);
+      } else if (input.value) {
+        kept.push(labels[f]);
+      }
+    });
+
+    showOcrLines(parsed.lines, parsed.linePasses);
+    showOcrCandidates(parsed);
+    ocrResultWrap.style.display = 'block';
+    ocrLinesDetails.open = false;
+    var hint = filled.length ? ('自動入力しました: ' + filled.join('・') + '。')
+      : (kept.length ? '新しく自動入力した項目はありません。' : '自動入力できる項目は見つかりませんでした。');
+    if (kept.length) hint += ' 入力済みの項目はそのままにしました: ' + kept.join('・') + '。';
+    if (missing.length) hint += ' 確認が必要な項目（赤枠）: ' + missing.join('・') + '。下の候補を選ぶか、手入力してください。';
+    if (optional.length) hint += ' 候補がある項目（茶色の枠）: ' + optional.join('・') + '。下の候補から選べます。';
+    if (missing.length || optional.length) hint += ' 名刺に書かれていない項目は、空欄のままで保存できます。';
+    if (parsed.email) hint += ' メールアドレスは1文字違いでも届かないので、名刺と見比べてください。';
+    if (parsed.quarter) hint += ' 写真の向きを自動で直して読み取りました。';
+    if (missing.length + optional.length >= 2) hint += ' 名刺が斜めに写っている場合は「四隅を合わせて補正」を使ってから読み取り直すと、読み取りやすくなります。';
+    ocrResultHint.textContent = hint;
+    setStatus(filled.length ? (filled.join('・') + 'を自動入力しました。内容を確認してください') : '文字は読み取れましたが、自動入力できる項目はありませんでした');
+  }
+
   ocrBtn.addEventListener('click', function () {
     if (!ocrSourceImage && !currentPhotoDataUrl) return;
     ocrBtn.disabled = true;
@@ -2262,52 +2317,7 @@
     ocrBtn.textContent = '読み取り中…(初回は時間がかかります)';
     setStatus('写真から文字を読み取っています…（前処理を変えて4回読むため、30秒ほどかかることがあります）');
 
-    loadOcrSource().then(readCard).then(function (parsed) {
-      ocrUsed = true;
-      if (parsed.quarter) uprightPhoto(parsed.quarter);
-      var labels = OCR_LABELS;
-      var filled = [];
-      var missing = [];
-      var kept = [];
-      OCR_FIELDS.forEach(function (f) {
-        var input = document.getElementById('f_' + f);
-        // 手で入力・修正した項目は触らない。空欄と、前回の自動入力のままの項目だけ入れる
-        var replaceable = !input.value || input.classList.contains('ocr-filled');
-        input.classList.remove('needs-check');
-        if (parsed[f] && replaceable) {
-          input.value = parsed[f];
-          input.classList.add('ocr-filled');
-          // 一致して読めた場合でも同じ読み違いが重なることがあるので、メールは必ず見比べてもらう
-          if (f === 'email') input.classList.add('needs-check');
-          filled.push(labels[f]);
-        } else if (parsed.candidates[f] && replaceable) {
-          // 読み方が分かれた項目は空欄にして、ここだけ目立たせる
-          input.value = '';
-          input.classList.remove('ocr-filled');
-          input.classList.add('needs-check');
-          missing.push(labels[f]);
-        } else if (!input.value && ['name', 'company', 'email'].indexOf(f) !== -1) {
-          input.classList.add('needs-check');
-          missing.push(labels[f]);
-        } else if (input.value) {
-          kept.push(labels[f]);
-        }
-      });
-
-      showOcrLines(parsed.lines, parsed.linePasses);
-      showOcrCandidates(parsed);
-      ocrResultWrap.style.display = 'block';
-      ocrLinesDetails.open = false;
-      var hint = filled.length ? ('自動入力しました: ' + filled.join('・') + '。')
-        : (kept.length ? '新しく自動入力した項目はありません。' : '自動入力できる項目は見つかりませんでした。');
-      if (kept.length) hint += ' 入力済みの項目はそのままにしました: ' + kept.join('・') + '。';
-      if (missing.length) hint += ' 確認が必要な項目（色枠）: ' + missing.join('・') + '。下の候補を選ぶか、手入力してください。';
-      if (parsed.email) hint += ' メールアドレスは1文字違いでも届かないので、名刺と見比べてください。';
-      if (parsed.quarter) hint += ' 写真の向きを自動で直して読み取りました。';
-      if (missing.length >= 2) hint += ' 名刺が斜めに写っている場合は「四隅を合わせて補正」を使ってから読み取り直すと、読み取りやすくなります。';
-      ocrResultHint.textContent = hint;
-      setStatus(filled.length ? (filled.join('・') + 'を自動入力しました。内容を確認してください') : '文字は読み取れましたが、自動入力できる項目はありませんでした');
-    }).catch(function (err) {
+    loadOcrSource().then(readCard).then(applyOcrResult).catch(function (err) {
       console.error(err);
       alert('文字の読み取りに失敗しました。インターネット接続と写真の写りを確認するか、手入力してください。（写真はそのまま保存できます）');
       countStatus();
@@ -2488,9 +2498,11 @@
     }
     var emailOk = !v.email || EMAIL_FORMAT_RE.test(v.email);
     if (!ocrUsed && emailOk) { doSave(); return; }
-    var rows = [['氏名', v.name], ['会社名', v.company], ['役職', v.title], ['固定電話', v.phone], ['携帯電話', v.mobile], ['メール', v.email], ['住所', v.address]];
+    // 3番目が true の項目（氏名・会社名）だけ、空欄を赤で知らせる。ほかは名刺に書かれていないことがあるので、空欄と分かる表示にとどめる
+    var rows = [['氏名', v.name, true], ['会社名', v.company, true], ['部署', v.department], ['役職', v.title], ['固定電話', v.phone], ['携帯電話', v.mobile], ['メール', v.email], ['住所', v.address]];
     var html = rows.map(function (r) {
-      return '<div class="card-row"><span class="k">' + r[0] + '</span><span>' + (r[1] ? esc(r[1]) : '<span style="color:var(--danger);">（未入力）</span>') + '</span></div>';
+      var empty = r[2] ? '<span style="color:var(--danger);">（未入力）</span>' : '<span style="color:var(--sub);">（空欄のまま保存します）</span>';
+      return '<div class="card-row"><span class="k">' + r[0] + '</span><span>' + (r[1] ? esc(r[1]) : empty) + '</span></div>';
     }).join('');
     if (!v.email) html += '<div class="hint">メールアドレスが空欄です。お礼メールを送る場合は入力してください（後から編集もできます）。</div>';
     html += checkFormats(v).map(function (w) { return '<div class="hint" style="color:var(--danger);">' + esc(w) + '</div>'; }).join('');

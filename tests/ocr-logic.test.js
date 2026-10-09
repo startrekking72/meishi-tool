@@ -373,12 +373,141 @@ const CASES = [
     } },
   { group: '既存機能', name: '一覧の表示（電話・携帯の行を含む）', type: 'keep',
     run: async function (env) { await tick(); return env.el('cardList').innerHTML; },
-    stored: true }
+    stored: true },
+
+  // ---- 6. 名刺に書かれていない項目を空欄のまま保存する ----
+  { group: '6 任意項目の空欄', name: '氏名だけ入力し、部署・役職・電話・メール・住所・交流会名・メモは空欄 → 保存できる', type: 'keep',
+    run: async function (env) {
+      await tick();
+      env.el('f_name').value = '山田 太郎';
+      env.fire('saveBtn', 'click');
+      await tick();
+      const saved = JSON.parse(env.store[STORAGE_KEY] || '[]');
+      return { 件数: saved.length, 名刺: scrub(JSON.stringify(saved[0])), 警告: env.alerts };
+    } },
+  { group: '6 任意項目の空欄', name: '自動読み取りのあと役職が空欄 → 確認画面が出て、「確認したので保存する」で保存できる', type: 'keep',
+    run: async function (env) {
+      await tick();
+      setForm(env, { name: '山田 太郎', company: '株式会社サンプル商事', title: '', email: 'yamada@sample.co.jp' });
+      env.ev('ocrUsed = true');
+      env.fire('saveBtn', 'click');
+      const shown = env.el('confirmModal').classList.contains('show');
+      env.fire('confirmSaveBtn', 'click');
+      await tick();
+      const saved = JSON.parse(env.store[STORAGE_KEY] || '[]');
+      return { 確認画面が出た: shown, 保存後の件数: saved.length, 役職: saved[0] && saved[0].title, 部署: saved[0] && saved[0].department, 警告: env.alerts };
+    },
+    expect: { 確認画面が出た: true, 保存後の件数: 1, 役職: '', 部署: '', 警告: [] } },
+  { group: '6 任意項目の空欄', name: '確認画面：空欄の部署・役職・電話・メール・住所を、赤い「未入力」にしない', type: 'improve',
+    run: async function (env) {
+      await tick();
+      setForm(env, { name: '山田 太郎', company: '株式会社サンプル商事' });
+      env.ev('ocrUsed = true');
+      env.fire('saveBtn', 'click');
+      return confirmRows(env);
+    },
+    expect: { 赤い未入力: [], 空欄の表示: ['部署', '役職', '固定電話', '携帯電話', 'メール', '住所'] } },
+  { group: '6 任意項目の空欄', name: '確認画面：氏名・会社名が空欄のときは、従来どおり赤で知らせる（保存はできる）', type: 'improve',
+    run: async function (env) {
+      await tick();
+      env.ev("currentPhotoDataUrl = 'data:image/jpeg;base64,PHOTO'");
+      env.ev('ocrUsed = true');
+      env.fire('saveBtn', 'click');
+      const rows = confirmRows(env);
+      env.fire('confirmSaveBtn', 'click');
+      await tick();
+      return { 赤い未入力: rows.赤い未入力, 保存後の件数: JSON.parse(env.store[STORAGE_KEY] || '[]').length };
+    },
+    expect: { 赤い未入力: ['氏名', '会社名'], 保存後の件数: 1 } },
+  { group: '6 任意項目の空欄', name: '氏名・会社名・写真がすべて空 → 従来どおり保存しない（どれか1つは必要）', type: 'keep',
+    run: async function (env) {
+      await tick();
+      setForm(env, { title: '部長', memo: 'メモだけ' });
+      env.fire('saveBtn', 'click');
+      await tick();
+      return { 件数: JSON.parse(env.store[STORAGE_KEY] || '[]').length, 警告: env.alerts };
+    },
+    expect: { 件数: 0, 警告: ['氏名・会社名・写真のいずれかは入力してください。'] } },
+  { group: '6 任意項目の空欄', name: '読み取りで役職の読み方が分かれた → 役職は赤枠にせず、空欄で保存できると案内する', type: 'improve',
+    run: async function (env) {
+      await tick();
+      env.ev('applyOcrResult')({ name: '山田 太郎', company: '', department: '', title: '', phone: '', mobile: '', email: '', address: '', quarter: 0,
+        candidates: { title: ['代表', '代衰'], company: ['株式会社A', '株式会社B'] }, lines: [], linePasses: [] });
+      function frame(id) { const c = env.el(id).classList; return c.contains('needs-check') ? '赤枠' : (c.contains('has-candidates') ? '茶色の枠' : 'なし'); }
+      const hint = env.el('ocrResultHint').textContent;
+      return { 役職: frame('f_title'), 部署: frame('f_department'), 会社名: frame('f_company'), メール: frame('f_email'), 氏名: frame('f_name'),
+        案内に空欄で保存できると書いてある: hint.indexOf('空欄のままで保存できます') !== -1 };
+    },
+    expect: { 役職: '茶色の枠', 部署: 'なし', 会社名: '赤枠', メール: '赤枠', 氏名: 'なし', 案内に空欄で保存できると書いてある: true } },
+  { group: '6 任意項目の空欄', name: '空欄で保存した名刺の再表示（一覧と、編集で開いたときの入力欄・写真）', type: 'keep',
+    run: async function (env) {
+      await tick();
+      env.el('f_name').value = '山田 太郎';
+      env.ev("currentPhotoDataUrl = 'data:image/jpeg;base64,PHOTO'; originalPhotoDataUrl = 'data:image/jpeg;base64,ORIG'");
+      env.fire('saveBtn', 'click');
+      await tick();
+      const list = scrub(env.el('cardList').innerHTML);
+      const id = env.ev('cards')[0].id;
+      env.fire('cardList', 'click', { target: { src: '', classList: { contains: function (c) { return c === 'edit-btn'; } }, closest: function () { return { getAttribute: function () { return id; } }; } } });
+      const form = {};
+      ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address', 'eventName', 'memo'].forEach(function (f) { form[f] = env.el('f_' + f).value; });
+      return { 一覧: list, 入力欄: form, 写真: env.el('photoPreview').src, 元の写真: env.ev('originalPhotoDataUrl'), 見出し: env.el('formTitle').textContent };
+    } },
+  { group: '6 任意項目の空欄', name: '空欄の名刺を編集して空欄のまま更新 → 写真・元の写真・登録日時が残る', type: 'keep',
+    run: async function (env) {
+      await tick();
+      const id = env.ev('cards')[1].id;
+      env.fire('cardList', 'click', { target: { src: '', classList: { contains: function (c) { return c === 'edit-btn'; } }, closest: function () { return { getAttribute: function () { return id; } }; } } });
+      setForm(env, { title: '', department: '', eventName: '', memo: '' });
+      env.fire('saveBtn', 'click');
+      await tick();
+      const saved = JSON.parse(env.store[STORAGE_KEY]);
+      return { 件数: saved.length, 触っていない名刺はそのまま: JSON.stringify(saved[0]) === JSON.stringify(LEGACY_CARDS[0]), 更新した名刺: scrub(JSON.stringify(saved[1])), 警告: env.alerts };
+    },
+    stored: true },
+  { group: '6 任意項目の空欄', name: 'JSON書き出し → 別の端末で読み込み：空欄の項目と写真がそのまま戻る', type: 'keep',
+    run: async function (env, html) {
+      await tick();
+      env.el('f_name').value = '山田 太郎';
+      env.ev("currentPhotoDataUrl = 'data:image/jpeg;base64,PHOTO'; originalPhotoDataUrl = 'data:image/jpeg;base64,ORIG'");
+      env.fire('saveBtn', 'click');
+      await tick();
+      env.fire('exportBtn', 'click');
+      const json = env.blobs[env.blobs.length - 1].text;
+      const other = makeEnv(html, {});
+      await tick();
+      other.el('importInput').files = [{ _text: json }];
+      other.fire('importInput', 'change');
+      await tick(); await tick();
+      const a = JSON.parse(json)[0], b = JSON.parse(other.store[STORAGE_KEY])[0];
+      const differs = Object.keys(b).filter(function (k) { return k !== 'id' && k !== 'updatedAt' && (a[k] || (k === 'mailOpenedAt' ? 0 : '')) !== b[k]; });
+      return { 読み込んだ件数: JSON.parse(other.store[STORAGE_KEY]).length, 食い違う項目: differs, 写真: b.photo, 元の写真: b.photoOriginal, 役職: b.title, 書き出したJSON: scrub(json) };
+    } },
+  { group: '6 任意項目の空欄', name: '役職などのキー自体がない古いJSONの読み込み → 空欄として読み込まれ、保存できる', type: 'keep',
+    run: async function (env) {
+      await tick();
+      env.el('importInput').files = [{ _text: JSON.stringify([{ name: '旧 太郎', photo: 'data:image/jpeg;base64,OLD' }]) }];
+      env.fire('importInput', 'change');
+      await tick(); await tick();
+      return { 名刺: scrub(env.store[STORAGE_KEY]), 一覧に表示: env.el('cardList').innerHTML.indexOf('旧 太郎') !== -1, 警告: env.alerts };
+    } }
 ];
+
+function setForm(env, values) { Object.keys(values).forEach(function (f) { env.el('f_' + f).value = values[f]; }); }
+// 保存前の確認画面に並んだ行のうち、赤い「未入力」になっている項目と、空欄と表示されている項目
+function confirmRows(env) {
+  const out = { 赤い未入力: [], 空欄の表示: [] };
+  env.el('confirmList').innerHTML.split('<div class="card-row">').slice(1).forEach(function (row) {
+    const label = /<span class="k">([^<]*)<\/span>/.exec(row)[1];
+    if (row.indexOf('var(--danger)') !== -1) out.赤い未入力.push(label);
+    else if (row.indexOf('var(--sub)') !== -1) out.空欄の表示.push(label);
+  });
+  return out;
+}
 
 async function runCase(html, c) {
   const stored = c.stored ? { [STORAGE_KEY]: JSON.stringify(LEGACY_CARDS) } : {};
-  try { return { value: plain(await c.run(makeEnv(html, stored))) }; } catch (err) { return { error: String(err && err.message || err) }; }
+  try { return { value: plain(await c.run(makeEnv(html, stored), html)) }; } catch (err) { return { error: String(err && err.message || err) }; }
 }
 function show(r) { return r.error ? '（エラー: ' + r.error + '）' : JSON.stringify(r.value); }
 
