@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <meta name="format-detection" content="telephone=no">
-<title>西川 尚｜有限会社アークリー</title>
+<title>明日しよう（西川 尚）｜有限会社アークリー</title>
 <style>
   :root {
     color-scheme: light;
@@ -40,9 +40,14 @@
     margin-bottom: 16px;
     box-shadow: var(--shadow);
   }
-  .company { font-size: 14px; color: var(--sub); margin: 0 0 14px; letter-spacing: 0.04em; }
+  .handle-label { font-size: 13px; color: var(--accent-dark); margin: 0 0 6px; letter-spacing: 0.08em; }
+  h1 { font-size: 40px; font-weight: 700; line-height: 1.25; margin: 0; letter-spacing: 0.06em; overflow-wrap: anywhere; }
+  .identity { margin: 20px 0 0; padding-top: 16px; border-top: 1px solid var(--border); }
+  .company { font-size: 14px; color: var(--sub); margin: 0 0 10px; letter-spacing: 0.04em; overflow-wrap: anywhere; }
   .title { font-size: 13px; color: var(--accent-dark); margin: 0 0 4px; letter-spacing: 0.08em; }
-  h1 { font-size: 32px; font-weight: 700; margin: 0; letter-spacing: 0.08em; }
+  .realname { font-size: 24px; font-weight: 400; line-height: 1.4; margin: 0; letter-spacing: 0.08em; overflow-wrap: anywhere; }
+  /* Chatwork名がないときは、本名を従来どおり大きく太く見せる */
+  .realname.main { font-size: 32px; font-weight: 700; }
   .tagline {
     margin: 22px 0 0;
     padding-top: 18px;
@@ -89,9 +94,13 @@
 <body>
 <main>
   <section class="panel">
-    <p class="company" id="pCompany"></p>
-    <p class="title" id="pTitle"></p>
-    <h1 id="pName"></h1>
+    <p class="handle-label" id="pHandleLabel">Chatwork名</p>
+    <h1 id="pHandle"></h1>
+    <div class="identity" id="identity">
+      <p class="company" id="pCompany"></p>
+      <p class="title" id="pTitle"></p>
+      <p class="realname" id="pName"></p>
+    </div>
     <p class="tagline" id="pTagline"></p>
     <p class="activities" id="pActivities"></p>
     <div class="contact-rows" id="contactRows" hidden></div>
@@ -120,6 +129,7 @@
   // 電話・メール・各リンクは本人が確認してから入れること。
   // 変更したら連絡先ファイル nishikawa.vcf も同じ内容に合わせる。
   var PROFILE = {
+    chatworkName: '明日しよう',  // メインの表示名（Chatwork名）。空欄にすると本名を大きく表示する
     name: '西川 尚',
     company: '有限会社アークリー',
     title: '代表',
@@ -140,6 +150,12 @@
   setText('pCompany', PROFILE.company);
   setText('pTitle', PROFILE.title);
   setText('pName', PROFILE.name);
+  setText('pHandle', PROFILE.chatworkName);
+  document.getElementById('pHandleLabel').hidden = !PROFILE.chatworkName;
+  if (!PROFILE.chatworkName) {
+    document.getElementById('pName').className = 'realname main';
+    document.getElementById('identity').className = '';
+  }
   setText('pTagline', PROFILE.tagline);
   setText('pActivities', PROFILE.activities);
 
