@@ -275,7 +275,7 @@ const CASES = [
     run: function (env) {
       shownLines(env, [['株式会社サンプル商事', '山田 太郎', '長寿社会への取り組み']], {});
       const row = { getAttribute: function () { return '1'; } };
-      env.fire('ocrLines', 'click', { target: { getAttribute: function () { return 'name'; }, closest: function () { return row; }, textContent: '氏名' } });
+      env.fire('ocrLines', 'click', { target: { getAttribute: function (k) { return k === 'data-f' ? 'name' : null; }, closest: function () { return row; }, textContent: '氏名' } });
       return { 氏名欄: env.el('f_name').value, 残りの行: plain(env.el('ocrLines')._lines) };
     },
     expect: { 氏名欄: '山田 太郎', 残りの行: ['株式会社サンプル商事', '長寿社会への取り組み'] } },
@@ -322,7 +322,8 @@ const CASES = [
   { group: '既存機能', name: '名刺の文字から各項目を取り出す処理（見本5枚）', type: 'keep',
     run: function (env) {
       const out = {};
-      Object.keys(SAMPLE_CARDS).forEach(function (k) { out[k] = plain(env.ev('parseCardText')(SAMPLE_CARDS[k])); });
+      // emailAlt（メールの別の読み）は後から足した項目。空のときは、修正前と見比べられるよう取り除く
+      Object.keys(SAMPLE_CARDS).forEach(function (k) { out[k] = plain(env.ev('parseCardText')(SAMPLE_CARDS[k])); if (!out[k].emailAlt) delete out[k].emailAlt; });
       return out;
     } },
   { group: '既存機能', name: 'メールアドレスの突き合わせ（欠けた読みをまとめる・食い違いは候補）', type: 'keep',
@@ -490,8 +491,223 @@ const CASES = [
       env.fire('importInput', 'change');
       await tick(); await tick();
       return { 名刺: scrub(env.store[STORAGE_KEY]), 一覧に表示: env.el('cardList').innerHTML.indexOf('旧 太郎') !== -1, 警告: env.alerts };
-    } }
+    } },
+
+  // ---- 7. 文字認識の乱れ（図柄の消し残し・氏名の端の余計な文字・メールの先頭の欠け） ----
+  { group: '7 図柄の消し方', name: 'QRコードのすぐ横（8px）に文字がある → QRは消し残さず、文字は消さない', type: 'improve',
+    run: function (env) { return graphicsCase(env, 8); },
+    expect: { QRの消し残し: 0, 消えた文字: 0 } },
+  { group: '7 図柄の消し方', name: 'QRコードと文字がごく近い（4px）→ それでも文字は消さない', type: 'improve',
+    run: function (env) { return graphicsCase(env, 4); },
+    expect: { QRの消し残し: 0, 消えた文字: 0 } },
+  { group: '7 図柄の消し方', name: '丸いロゴ（四角くない図柄）は従来と同じ消し方のまま', type: 'keep',
+    run: function (env) {
+      const bmp = makeBitmap(700, 400);
+      for (let y = -90; y <= 90; y++) for (let x = -90; x <= 90; x++) if (x * x + y * y <= 8100) bmp.fill(250 + x, 200 + y, 1, 1);
+      drawTextLike(bmp, 400, 190, 200, 30);
+      return env.ev('findGraphics')(bmp, 34).map(function (r) { return [r.x, r.y, r.w, r.h].map(function (v) { return Math.round(v * 10000); }).join(','); }).join(' ');
+    } },
+  { group: '7 図柄の消し方', name: '図柄のない名刺（文字だけ）→ 何も消さない', type: 'keep',
+    run: function (env) {
+      const bmp = makeBitmap(700, 400);
+      [60, 120, 180, 240, 300].forEach(function (y) { drawTextLike(bmp, 60, y, 520, 30); });
+      return env.ev('findGraphics')(bmp, 34).length;
+    },
+    expect: 0 },
+
+  { group: '7 氏名の端の文字', name: '氏名の端に図形に似た文字（回）が付いた → 自動では入れず、除いた形を先頭に両方を候補に出す', type: 'improve',
+    run: function (env) {
+      const items = [line('山田 太郎 回', 48)].concat(BODY);
+      const r = combine(env, [items, items, items]);
+      return { name: r.name, 候補: r.candidates.name || [] };
+    },
+    expect: { name: '', 候補: ['山田 太郎', '山田太郎回'] } },
+  { group: '7 氏名の端の文字', name: '3回のうち1回だけ余計な文字が付き、残り2回は一致した → 一致した読みを自動入力する', type: 'improve',
+    run: function (env) {
+      const junk = [line('佐藤 花子 ロ', 48)].concat(BODY), clean = [line('佐藤 花子', 48)].concat(BODY);
+      const r = combine(env, [clean, junk, clean]);
+      return { name: r.name, 候補: r.candidates.name || [] };
+    },
+    expect: { name: '佐藤 花子', 候補: [] } },
+  { group: '7 氏名の端の文字', name: '「口」で終わる姓（山口・川口）や、途中に「口」がある氏名は、従来どおり自動入力する', type: 'keep',
+    run: function (env) {
+      return ['山口', '川口 花子', '樋口 一葉', '谷口 太郎'].map(function (name) {
+        const items = [line(name, 48)].concat(BODY);
+        return combine(env, [items, items, items]).name;
+      });
+    },
+    expect: ['山口', '川口 花子', '樋口 一葉', '谷口 太郎'] },
+
+  { group: '7 メールの先頭', name: '先頭の1文字が空白で切り離されて読まれた「t anaka@…」→ つなげた形を採用し、つなげない形も候補に出す', type: 'improve',
+    run: function (env) {
+      const items = [line('山田 太郎', 48), line('東京都千代田区千代田1-2-3'), line('t anaka@example.com')];
+      const r = combine(env, [items, items, items]);
+      return { email: r.email, 候補: r.candidates.email || [] };
+    },
+    expect: { email: 'tanaka@example.com', 候補: ['anaka@example.com'] } },
+  { group: '7 メールの先頭', name: '1回だけ切り離されて読まれた → ほかの読みと同じアドレスとして確定する', type: 'improve',
+    run: function (env) {
+      const split = [line('yo shida@example.co.jp')], whole = [line('yoshida@example.co.jp')];
+      const r = combine(env, [whole, split, whole]);
+      return { email: r.email, 候補: r.candidates.email || [] };
+    },
+    expect: { email: 'yoshida@example.co.jp', 候補: ['shida@example.co.jp'] } },
+  { group: '7 メールの先頭', name: '見出しの略号（E・M）や大文字・数字の切れ端はつなげない（つなげた形は候補にだけ出す）', type: 'improve',
+    run: function (env) {
+      return ['E info@example.com', 'M info@example.com', 'R info@example.com', 'TEL 03 info@example.com'].map(function (text) {
+        const r = combine(env, [[line(text)], [line(text)], [line(text)]]);
+        return r.email + ' / 候補: ' + (r.candidates.email || []).join(',');
+      });
+    },
+    expect: ['info@example.com / 候補: Einfo@example.com', 'info@example.com / 候補: Minfo@example.com', 'info@example.com / 候補: Rinfo@example.com', 'info@example.com / 候補: 03info@example.com'] },
+  { group: '7 メールの先頭', name: '見出しつき・見出しなしの普通のアドレスは従来どおり', type: 'keep',
+    run: function (env) {
+      return ['E-mail: info@example.com', 'Mail info@example.com', 'メール：info@example.com', 'info@example.com', 'info @ example . com', 'E-mail info@example.com URL https://example.com'].map(function (text) {
+        const r = combine(env, [[line(text)], [line(text)], [line(text)]]);
+        return r.email + ' / 候補: ' + (r.candidates.email || []).join(',');
+      });
+    },
+    expect: ['info@example.com / 候補: ', 'info@example.com / 候補: ', 'info@example.com / 候補: ', 'info@example.com / 候補: ', 'info@example.com / 候補: ', 'info@example.com / 候補: '] },
+
+  { group: '7 読み違いの補正', name: 'カタカナの語の前の「Al」（Iをlと読み違えたもの）→「AI」に直す。ほかの英字の語は変えない', type: 'improve',
+    run: function (env) {
+      const f = env.ev('normalizeOcrText');
+      return ['Al プレゼンター', 'Alコンサルタント', '生成Al エンジニア', 'Alice Smith', 'Al Jazeera', 'ALSOK', 'CEO Albert', 'AIプレゼンター'].map(function (t) { return f(t); });
+    },
+    expect: ['AI プレゼンター', 'AIコンサルタント', '生成AI エンジニア', 'Alice Smith', 'Al Jazeera', 'ALSOK', 'CEO Albert', 'AIプレゼンター'] },
+
+  // ---- 8. 候補・行を正しい欄へ入れる ----
+  { group: '8 欄への反映', name: 'まとめられた行の「別の読み」を選んでから氏名に入れる → 選んだ読みが入る', type: 'improve',
+    run: function (env) {
+      shownLines(env, [['山田太郎回', '長寿社会への取り組み'], ['山田太郎'], ['山田太郎回']], {});
+      const shown = plain(env.el('ocrLines')._lines);
+      const row = { getAttribute: function () { return '0'; } };
+      env.fire('ocrLines', 'click', { target: { getAttribute: function (k) { return k === 'data-r' ? '山田太郎' : null; }, closest: function () { return row; }, textContent: '山田太郎' } });
+      env.fire('ocrLines', 'click', { target: { getAttribute: function (k) { return k === 'data-f' ? 'name' : null; }, closest: function () { return row; }, textContent: '氏名' } });
+      return { 一覧の先頭: shown[0], 氏名欄: env.el('f_name').value };
+    },
+    expect: { 一覧の先頭: '山田太郎回', 氏名欄: '山田太郎' } },
+  { group: '8 欄への反映', name: '行を項目に入れる → 見出しや別の項目を除いて、その項目に当たる部分だけが入る', type: 'improve',
+    run: function (env) {
+      const lines = ['E-mail: info@example.com', 'TEL 03-1234-5678 FAX 03-1234-5679', '携帯 090-1111-2222', '〒100-0001 東京都千代田区千代田1-2-3 TEL 03-1111-2222', '【株式会社サンプル商事】', '・営業部'];
+      const targets = ['email', 'phone', 'mobile', 'address', 'company', 'department'];
+      env.el('ocrHideUsed').checked = false;
+      shownLines(env, [lines], {}, { merge: true, hideUsed: false });
+      const out = {};
+      targets.forEach(function (f, i) {
+        const row = { getAttribute: function () { return String(i); } };
+        env.fire('ocrLines', 'click', { target: { getAttribute: function (k) { return k === 'data-f' ? f : null; }, closest: function () { return row; }, textContent: f } });
+        out[f] = env.el('f_' + f).value;
+      });
+      return out;
+    },
+    expect: { email: 'info@example.com', phone: '03-1234-5678', mobile: '090-1111-2222', address: '〒100-0001 東京都千代田区千代田1-2-3', company: '株式会社サンプル商事', department: '営業部' } },
+  { group: '8 欄への反映', name: '項目に当たる部分が取り出せない行は、従来どおり行をそのまま入れる（メモへの追記も従来どおり）', type: 'keep',
+    run: function (env) {
+      shownLines(env, [['長寿社会への取り組み', 'AI活用・出版']], {}, { merge: true, hideUsed: false });
+      const out = {};
+      [['email', 0], ['phone', 0], ['title', 1], ['memo', 0], ['memo', 1]].forEach(function (t) {
+        const row = { getAttribute: function () { return String(t[1]); } };
+        env.fire('ocrLines', 'click', { target: { getAttribute: function (k) { return k === 'data-f' ? t[0] : null; }, closest: function () { return row; }, textContent: t[0] } });
+        out[t[0]] = env.el('f_' + t[0]).value;
+      });
+      return out;
+    },
+    expect: { email: '長寿社会への取り組み', phone: '長寿社会への取り組み', title: 'AI活用・出版', memo: '長寿社会への取り組み\nAI活用・出版' } },
+  { group: '8 欄への反映', name: '候補ボタンをタップ → その候補の項目の欄に入る（氏名・メール・住所）', type: 'keep',
+    run: function (env) {
+      const out = {};
+      [['name', '山田 太郎'], ['email', 'tanaka@example.com'], ['address', '〒100-0001 東京都千代田区千代田1-2-3 ABCビル']].forEach(function (t) {
+        env.fire('ocrCandidates', 'click', { target: { getAttribute: function (k) { return k === 'data-f' ? t[0] : (k === 'data-v' ? t[1] : null); } } });
+        out[t[0]] = env.el('f_' + t[0]).value;
+      });
+      return out;
+    },
+    expect: { name: '山田 太郎', email: 'tanaka@example.com', address: '〒100-0001 東京都千代田区千代田1-2-3 ABCビル' } },
+  { group: '8 欄への反映', name: '「部署と役職の内容を入れ替える」→ 役職に入った肩書きを部署へ移せる', type: 'improve',
+    run: function (env) {
+      setForm(env, { department: '', title: 'AIプレゼンター' });
+      env.fire('swapDeptTitleBtn', 'click');
+      const once = { 部署: env.el('f_department').value, 役職: env.el('f_title').value };
+      env.fire('swapDeptTitleBtn', 'click');
+      return { 一度押す: once, もう一度押す: { 部署: env.el('f_department').value, 役職: env.el('f_title').value } };
+    },
+    expect: { 一度押す: { 部署: 'AIプレゼンター', 役職: '' }, もう一度押す: { 部署: '', 役職: 'AIプレゼンター' } } },
+  { group: '8 欄への反映', name: '肩書きの自動の振り分け（「〜プレゼンター」「〜コンサルタント」は役職、「営業部」は部署）は変えていない', type: 'keep',
+    run: function (env) {
+      return ['AIプレゼンター', 'ITコンサルタント', '営業部', '営業部 部長'].map(function (text) {
+        const r = env.ev('parseCardText')('株式会社サンプル商事\n' + text + '\n山田 太郎');
+        return '部署=' + r.department + ' 役職=' + r.title;
+      });
+    },
+    expect: ['部署= 役職=AIプレゼンター', '部署= 役職=ITコンサルタント', '部署=営業部 役職=', '部署=営業部 役職=部長'] },
+  { group: '8 欄への反映', name: '役職・部署を空欄にしたまま保存できる（入れ替えで役職が空になったあとも）', type: 'improve',
+    run: async function (env) {
+      await tick();
+      setForm(env, { name: '山田 太郎', department: '', title: 'AIプレゼンター' });
+      env.fire('swapDeptTitleBtn', 'click');
+      env.fire('saveBtn', 'click');
+      await tick();
+      const saved = JSON.parse(env.store[STORAGE_KEY] || '[]');
+      return { 件数: saved.length, 部署: saved[0] && saved[0].department, 役職: saved[0] && saved[0].title, 警告: env.alerts };
+    },
+    expect: { 件数: 1, 部署: 'AIプレゼンター', 役職: '', 警告: [] } }
 ];
+
+// ---- 図柄を消す処理のための、白黒の絵（1＝黒）。index.html の findGraphics が受け取る canvas の代わり ----
+function makeBitmap(W, H) {
+  const bits = new Uint8Array(W * H);
+  return {
+    width: W, height: H, bits: bits,
+    fill: function (x, y, w, h) { for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) bits[yy * W + xx] = 1; },
+    getContext: function () {
+      return { getImageData: function () {
+        const data = new Uint8ClampedArray(W * H * 4);
+        for (let i = 0; i < W * H; i++) { data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = bits[i] ? 0 : 255; data[i * 4 + 3] = 255; }
+        return { data: data };
+      } };
+    }
+  };
+}
+// QRコードに似た絵：3つの隅に「回」の形の目印、ほかは決まった並びの点
+function drawQrLike(bmp, x, y, modules, m) {
+  // 偏りのない決まった並びを作る（実際のQRコードも、白黒が偏らないように作られている）
+  let state = 20261009;
+  function next() { state = (state + 0x6D2B79F5) | 0; let t = Math.imul(state ^ (state >>> 15), 1 | state); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }
+  for (let r = 0; r < modules; r++) for (let c = 0; c < modules; c++) {
+    const bit = next() < 0.5;
+    const corner = (r < 7 && c < 7) ? [r, c] : (r < 7 && c >= modules - 7) ? [r, c - (modules - 7)] : (r >= modules - 7 && c < 7) ? [r - (modules - 7), c] : null;
+    const dark = corner ? (corner[0] === 0 || corner[0] === 6 || corner[1] === 0 || corner[1] === 6 || (corner[0] >= 2 && corner[0] <= 4 && corner[1] >= 2 && corner[1] <= 4)) : bit;
+    if (dark) bmp.fill(x + c * m, y + r * m, m, m);
+  }
+}
+// 文字の行に似た絵：縦の線と横の線の並び
+function drawTextLike(bmp, x, y, w, h) {
+  for (let xx = x; xx + 3 <= x + w; xx += 9) bmp.fill(xx, y, 3, h);
+  bmp.fill(x, y + Math.floor(h / 2), w - (w % 9 || 9) + 3, 2);
+}
+// QRの左右に gap ピクセルだけ離して文字の行を置き、消される範囲を調べる
+function graphicsCase(env, gap) {
+  const W = 900, H = 420, qx = 360, qy = 110, m = 4, n = 41, size = n * m;  // QRの1マスは本文の文字より細かい
+  const bmp = makeBitmap(W, H);
+  drawQrLike(bmp, qx, qy, n, m);
+  const textLeft = { x: qx - gap - 198, y: qy + 60, w: 198, h: 34 }, textRight = { x: qx + size + gap, y: qy + 90, w: 198, h: 34 };
+  [textLeft, textRight].forEach(function (t) { drawTextLike(bmp, t.x, t.y, t.w, t.h); });
+  const rects = env.ev('findGraphics')(bmp, 34).map(function (r) {
+    const x = Math.round(r.x * W), y = Math.round(r.y * H);
+    return { x0: x, y0: y, x1: x + Math.round(r.w * W), y1: y + Math.round(r.h * H) };
+  });
+  function uncovered(area, wantCovered) {
+    let count = 0;
+    for (let y = area.y; y < area.y + area.h; y++) for (let x = area.x; x < area.x + area.w; x++) {
+      if (!bmp.bits[y * W + x]) continue;
+      const covered = rects.some(function (r) { return x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1; });
+      if (covered !== wantCovered) count++;
+    }
+    return count;
+  }
+  return { QRの消し残し: uncovered({ x: qx, y: qy, w: size, h: size }, true), 消えた文字: uncovered(textLeft, false) + uncovered(textRight, false) };
+}
 
 function setForm(env, values) { Object.keys(values).forEach(function (f) { env.el('f_' + f).value = values[f]; }); }
 // 保存前の確認画面に並んだ行のうち、赤い「未入力」になっている項目と、空欄と表示されている項目

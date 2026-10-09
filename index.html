@@ -234,6 +234,8 @@
   .ocr-line-text { overflow-wrap: anywhere; margin-bottom: 4px; }
   .ocr-assign { display: flex; flex-wrap: wrap; gap: 4px; }
   .ocr-assign button { flex: 0 0 auto; padding: 4px 8px; font-size: 11px; border-radius: 6px; }
+  .ocr-assign button.ocr-reading { font-size: 13px; background: var(--chip); }
+  .ocr-assign button.ocr-reading.picked { background: var(--accent); border-color: var(--accent); color: #fff; }
   .card-top { display: flex; gap: 10px; align-items: flex-start; }
   .card-headtext { flex: 1; min-width: 0; }
   .card-thumb {
@@ -348,6 +350,7 @@
           </div>
           <div id="ocrResultWrap" style="display:none;">
             <div class="hint" id="ocrResultHint"></div>
+            <button type="button" class="btn-small" id="swapDeptTitleBtn" style="margin-top:6px;">部署と役職の内容を入れ替える</button>
             <div class="ocr-lines" id="ocrCandidates"></div>
             <details style="margin-top:6px;" id="ocrLinesDetails">
               <summary style="cursor:pointer; font-size:12px; color:var(--sub);">読み取った行を見る・項目に割り当てる</summary>
@@ -1006,6 +1009,7 @@
     ocrResultHint.textContent = '';
     ocrLines.innerHTML = '';
     ocrLines._raw = null;
+    ocrLines._picked = {};
     ocrLines._passes = null;
     ocrLinesNote.textContent = '';
     ocrCandidates.innerHTML = '';
@@ -1101,13 +1105,18 @@
       .replace(/：/g, ':')
       .replace(/＋/g, '+')
       .replace(/　/g, ' ')
-      .replace(/(\d)\s*[－ー‐―─—–-]\s*(?=\d)/g, '$1-');
+      .replace(/(\d)\s*[－ー‐―─—–-]\s*(?=\d)/g, '$1-')
+      // 大文字の「I」は小文字の「l」と読み違えやすい。カタカナの語の前の「Al」は「AI」（AIコンサルタント など）として扱う
+      .replace(/(^|[^A-Za-z])Al(?=\s*[ァ-ヺ])/g, '$1AI');
   }
 
   // OCRは日本語を1文字ずつ空白で区切ることがあるので、和文どうしの間の空白を詰める
   function squeezeJa(line) {
     return line.replace(new RegExp('([' + CJK + '])\\s+(?=[' + CJK + '])', 'g'), '$1').replace(/\s+/g, ' ').trim();
   }
+
+  // 氏名のすぐ隣にあるアイコン・ロゴ・QRコードの端は、形の似た文字（回・口・ロなど）として読まれ、氏名の端に付くことがある
+  var ICON_LIKE_EDGE_RE = /^[回囗口ロ\s]+|[\s回囗口ロ]+$/g;
 
   function isPersonName(compact) {
     if (!/^[一-鿿々][一-鿿々ぁ-ゖァ-ヺー]{1,6}$/.test(compact)) return false;
@@ -1125,14 +1134,29 @@
     return /[A-Za-z0-9._-]\s*@\s*[A-Za-z0-9-]/.test(text);
   }
 
-  function extractEmail(lines) {
+  // 見出しの略号として書かれることのある短い語（「E info@…」「M info@…」など）
+  var EMAIL_LABEL_RE = /^(e|m|em|ml|to|at|add|adr)$/i;
+
+  // メールアドレスを読み取る。OCRはアドレスの先頭1〜3文字だけを空白で切り離して読むことがある（「t anaka@…」）。
+  // 切り離された切れ端がアドレスと同じ小文字なら、つなげた形を email に、つなげない形を alt（別の読み）に返す。
+  // 見出しの略号・大文字・数字だけの切れ端（アイコンの読み違いや別の項目の一部に多い）はつなげず、つなげた形を alt に返す
+  function readEmail(lines) {
     for (var i = 0; i < lines.length; i++) {
       if (lines[i].indexOf('@') === -1) continue;
-      var m = lines[i].replace(/\s*([@.])\s*/g, '$1').match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/);
-      if (m) return m[0].replace(/[.,;:]+$/, '');
+      var text = lines[i].replace(/\s*([@.])\s*/g, '$1');
+      var m = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/.exec(text);
+      if (!m) continue;
+      var email = m[0].replace(/[.,;:]+$/, '');
+      var piece = /(?:^|[^A-Za-z0-9._%+-])([A-Za-z0-9]{1,3})\s+$/.exec(text.slice(0, m.index));
+      if (!piece) return { email: email, alt: '' };
+      var joined = piece[1] + email;
+      var natural = /^[a-z0-9]*[a-z][a-z0-9]*$/.test(piece[1]) && !EMAIL_LABEL_RE.test(piece[1]) && !/[A-Z]/.test(email.split('@')[0]);
+      return natural ? { email: joined, alt: email } : { email: email, alt: joined };
     }
-    return '';
+    return { email: '', alt: '' };
   }
+
+  function extractEmail(lines) { return readEmail(lines).email; }
 
   function extractPhones(lines) {
     var re = /(?:\+81[-\s]?\d{1,4}|\(?0\d{1,4}\)?)[-\s(]*\d{1,4}[-\s)]*\d{3,4}/g;
@@ -1261,11 +1285,14 @@
     var readable = rows.filter(function (r) { return r.conf >= 45; }).map(function (r) { return r.text; });
     var out = {
       name: '', company: '', department: '', title: '',
-      email: extractEmail(extra.concat(readable)),
+      email: '', emailAlt: '',
       phone: '', mobile: '',
       address: extractAddress(readable.concat(extra)),
       lines: rows.filter(function (r) { return r.conf >= 50 && isMeaningful(r.tidy); }).map(function (r) { return r.tidy; })
     };
+    var mail = readEmail(extra.concat(readable));
+    out.email = mail.email;
+    out.emailAlt = mail.alt;
     var phones = extractPhones(readable.concat(extra));
     out.phone = phones.phone;
     out.mobile = phones.mobile;
@@ -1274,7 +1301,11 @@
 
     function addName(text, h) {
       var value = formatName(text);
-      if (!nameCandidates.some(function (c) { return c.value === value; })) nameCandidates.push({ value: value, h: h });
+      if (nameCandidates.some(function (c) { return c.value === value; })) return;
+      // 端の文字が図形に似た文字で、それを除いても氏名として成り立つなら、除いた形（bare）も控えておく
+      var bare = text.replace(ICON_LIKE_EDGE_RE, '').trim();
+      var hasBare = bare !== text.trim() && isPersonName(bare.replace(/\s+/g, ''));
+      nameCandidates.push({ value: value, h: h, bare: hasBare ? formatName(bare) : '' });
     }
 
     rows.forEach(function (row) {
@@ -1345,9 +1376,15 @@
     var bodyHeight = heights.length ? heights[Math.floor((heights.length - 1) / 2)] : 0;
     var named = nameCandidates.filter(function (c) { return !bodyHeight || c.h >= bodyHeight * 1.15; })
       .sort(function (a, b) { return b.h - a.h; });
-    if (named.length === 1 || (named.length > 1 && named[0].h >= named[1].h * 1.25)) out.name = named[0].value;
+    // 端に図形に似た文字が付いた氏名は、どちらが正しいか決められないので自動では入れず、両方を候補にする
+    if ((named.length === 1 || (named.length > 1 && named[0].h >= named[1].h * 1.25)) && !named[0].bare) out.name = named[0].value;
     // 候補は文字の大きい順に並べる（選んでもらうときに、氏名らしいものが先に来る）
-    out.nameCandidates = nameCandidates.slice().sort(function (a, b) { return b.h - a.h; }).map(function (c) { return c.value; });
+    out.nameCandidates = [];
+    nameCandidates.slice().sort(function (a, b) { return b.h - a.h; }).forEach(function (c) {
+      (c.bare ? [c.bare, c.value] : [c.value]).forEach(function (value) {
+        if (out.nameCandidates.indexOf(value) === -1) out.nameCandidates.push(value);
+      });
+    });
     ['name', 'company', 'department', 'title', 'address'].forEach(function (f) { out[f] = trimJunk(out[f]); });
     return out;
   }
@@ -1707,13 +1744,54 @@
       var bw = maxX - minX + 1, bh = maxY - minY + 1;
       // 芯は外周1マス分だけ小さくなっているので、その分を足して大きさを見る
       if ((bw + 2) * cell >= lineHeight * 4 && (bh + 2) * cell >= lineHeight * 4 && members.length >= bw * bh * 0.55) {
-        // 芯のマスとその周り1マスだけを消す。外枠の矩形で消すと、すぐ隣の文字（氏名の最後の1文字など）まで消えてしまう
-        members.forEach(function (mcell) {
-          rects.push({ x: (mcell[0] - 1) * cell / W, y: (mcell[1] - 1) * cell / H, w: 3 * cell / W, h: 3 * cell / H });
-        });
+        // QRコードや写真のような四角い図柄は、輪郭ぴったりの四角で消す。マス目単位で消すと端が消え残って文字として
+        // 読まれたり、逆にすぐ隣の文字まで消えたりするため
+        var box = tightBox(minX * cell, minY * cell, Math.min(W, (maxX + 1) * cell) - 1, Math.min(H, (maxY + 1) * cell) - 1);
+        if (box) {
+          rects.push({ x: (box.left - 2) / W, y: (box.top - 2) / H, w: (box.right - box.left + 5) / W, h: (box.bottom - box.top + 5) / H });
+        } else {
+          // 丸いロゴなど四角くない図柄は、芯のマスとその周り1マスだけを消す。外枠の矩形で消すと、くぼみにある文字まで消えてしまう
+          members.forEach(function (mcell) {
+            rects.push({ x: (mcell[0] - 1) * cell / W, y: (mcell[1] - 1) * cell / H, w: 3 * cell / W, h: 3 * cell / H });
+          });
+        }
       }
     }
     return rects;
+
+    function isDark(x, y) { return px[(y * W + x) * 4] < 128; }
+    // 図柄の一部とみなす列（行）か。図柄は高さ（幅）いっぱいに黒い点があるが、隣の文字の行は一部にしか黒い点がない
+    function inked(vertical, pos, from, to) {
+      var count = 0;
+      for (var k = from; k < to; k++) { if (vertical ? isDark(pos, k) : isDark(k, pos)) count++; }
+      return count >= (to - from) * 0.12;
+    }
+    // edge から dir の向きへ、図柄が続くところまで広げる。図柄の終わりが見つからなければ null
+    function grow(vertical, edge, dir, from, to) {
+      var last = edge, blank = 0;
+      for (var step = 1; step <= cell * 3; step++) {
+        var pos = edge + dir * step;
+        if (pos < 0 || pos >= (vertical ? W : H)) return last;
+        if (inked(vertical, pos, from, to)) { last = pos; blank = 0; }
+        else if (++blank >= 2) return last;
+      }
+      return null;
+    }
+    // 芯の範囲（x0〜x1, y0〜y1）から図柄の輪郭まで広げた四角を返す。四隅のうち3つ以上に黒い点がある四角い図柄だけを対象にする
+    function tightBox(x0, y0, x1, y1) {
+      var left = grow(true, x0, -1, y0, y1 + 1), right = grow(true, x1, 1, y0, y1 + 1);
+      if (left === null || right === null) return null;
+      var top = grow(false, y0, -1, left, right + 1), bottom = grow(false, y1, 1, left, right + 1);
+      if (top === null || bottom === null) return null;
+      var size = Math.max(4, Math.round(Math.min(right - left, bottom - top) * 0.12));
+      var corners = 0;
+      [[left, top], [right - size + 1, top], [left, bottom - size + 1], [right - size + 1, bottom - size + 1]].forEach(function (c) {
+        var count = 0;
+        for (var yy = c[1]; yy < c[1] + size; yy++) { for (var xx = c[0]; xx < c[0] + size; xx++) { if (isDark(xx, yy)) count++; } }
+        if (count >= size * size * 0.15) corners++;
+      });
+      return corners >= 3 ? { left: left, top: top, right: right, bottom: bottom } : null;
+    }
   }
 
   function maskRects(canvas, rects) {
@@ -1884,6 +1962,13 @@
       result[f] = decided.value;
       if (decided.candidates.length) result.candidates[f] = decided.candidates;
     });
+    // メールの「先頭の切れ端をつなげた／つなげない」別の読みは、確定した内容と違えば候補に並べて選べるようにする
+    parses.forEach(function (parsed) {
+      var alt = parsed.emailAlt;
+      if (!alt || plainKey(alt) === plainKey(result.email)) return;
+      var list = result.candidates.email || (result.candidates.email = []);
+      if (list.length < 4 && !list.some(function (v) { return plainKey(v) === plainKey(alt); })) list.push(alt);
+    });
     if (!result.name) {
       var names = mergeNameCandidates(parses.map(function (parsed) { return parsed.nameCandidates || []; }), result.candidates.name);
       if (names.length) result.candidates.name = names;
@@ -2042,6 +2127,7 @@
   // lines は読み取った行（重なりを除いたもの）、passes は読み取りごとの行。どちらも元のまま持っておき、表示のときだけ整理する
   function showOcrLines(lines, passes) {
     ocrLines._raw = lines;
+    ocrLines._picked = {};
     ocrLines._passes = passes || [];
     renderOcrLines();
   }
@@ -2061,29 +2147,74 @@
     if (merged) notes.push('似た行 ' + merged + ' 行をまとめました');
     if (hidden) notes.push('入力済みの項目に使った ' + hidden + ' 行を隠しています');
     ocrLinesNote.textContent = notes.length ? (notes.join('。') + '。上のチェックを外すと、すべての行を表示します。') : '';
+    var picked = ocrLines._picked || (ocrLines._picked = {});
+    function pickedOf(en) { return en.variants.indexOf(picked[en.text]) !== -1 ? picked[en.text] : en.text; }
     ocrLines.innerHTML = shown.length ? shown.map(function (en, i) {
-      var others = en.variants.filter(function (line) { return line !== en.text; });
-      return '<div class="ocr-line" data-i="' + i + '"><div class="ocr-line-text">' + esc(en.text) + '</div>' +
-        (others.length ? '<div class="hint" style="margin:0 0 4px;">ほかの読み: ' + others.map(esc).join(' ／ ') + '</div>' : '') +
+      var current = pickedOf(en);
+      // 読み方が分かれた行は、どの読みを使うかをタップで選べる（選んだ読みが下のボタンで項目に入る）
+      return '<div class="ocr-line" data-i="' + i + '"><div class="ocr-line-text">' + esc(current) + '</div>' +
+        (en.variants.length > 1 ? '<div class="ocr-assign" style="margin:0 0 6px;"><span class="hint" style="margin:0; align-self:center;">読み方を選ぶ:</span>' +
+          en.variants.map(function (line) {
+            return '<button type="button" class="ocr-reading' + (line === current ? ' picked' : '') + '" data-r="' + esc(line) + '">' + esc(line) + '</button>';
+          }).join('') + '</div>' : '') +
         '<div class="ocr-assign">' +
         ASSIGN_TARGETS.map(function (t) { return '<button type="button" data-f="' + t[0] + '">' + t[1] + '</button>'; }).join('') +
         '</div></div>';
     }).join('') : '<div class="hint">' + (raw.length ? '表示する行はありません。' : 'はっきり読み取れた行はありませんでした。') + '</div>';
-    ocrLines._lines = shown.map(function (en) { return en.text; });
+    ocrLines._lines = shown.map(pickedOf);
+    ocrLines._reps = shown.map(function (en) { return en.text; });
   }
+
+  // 行を項目に入れるとき、その項目に当たる部分だけを取り出す（「E-mail: a@b.jp」→ アドレスだけ、「TEL 03-…」→ 番号だけ）。
+  // 取り出せないときは行をそのまま入れる（従来どおり、入れたあとに手で直せる）
+  function refineForField(f, line) {
+    var text = normalizeOcrText(line || '').trim();
+    var tidy = squeezeJa(text);
+    var value = '';
+    if (f === 'email') value = readEmail([text]).email;
+    else if (f === 'phone' || f === 'mobile') {
+      var phones = extractPhones([text]);
+      value = f === 'phone' ? (phones.phone || phones.mobile) : (phones.mobile || phones.phone);
+    } else if (f === 'address') value = extractAddress([text]);
+    else if (f === 'company') value = trimJunk(COMPANY_RE.test(tidy) ? pickCompany(tidy) : tidy);
+    else if (f === 'name' || f === 'department' || f === 'title') value = trimJunk(text);
+    return value || line;
+  }
+
+  // 肩書きは部署とも役職とも読めることがあるので、自動の振り分けが合わなかったときにひと押しで入れ替えられるようにする
+  document.getElementById('swapDeptTitleBtn').addEventListener('click', function () {
+    var dept = document.getElementById('f_department'), title = document.getElementById('f_title');
+    if (!dept.value && !title.value) { setStatus('部署も役職も空欄です'); return; }
+    var kept = dept.value;
+    dept.value = title.value;
+    title.value = kept;
+    [dept, title].forEach(function (input) { input.classList.remove('needs-check', 'has-candidates', 'ocr-filled'); });
+    setStatus('部署と役職の内容を入れ替えました');
+    renderOcrLines();
+  });
 
   ocrMergeSimilar.addEventListener('change', renderOcrLines);
   ocrHideUsed.addEventListener('change', renderOcrLines);
 
   ocrLines.addEventListener('click', function (e) {
     var f = e.target.getAttribute('data-f');
+    var reading = e.target.getAttribute('data-r');
     var row = e.target.closest('.ocr-line');
-    if (!f || !row) return;
-    var text = ocrLines._lines[Number(row.getAttribute('data-i'))];
+    if (!row) return;
+    var index = Number(row.getAttribute('data-i'));
+    if (reading) {
+      // 読み方を選んだだけ。項目にはまだ入れない
+      (ocrLines._picked || (ocrLines._picked = {}))[ocrLines._reps[index]] = reading;
+      renderOcrLines();
+      return;
+    }
+    if (!f) return;
+    var text = ocrLines._lines[index];
     var input = document.getElementById('f_' + f);
     if (f === 'memo') {
       input.value = input.value ? (input.value.replace(/\s+$/, '') + '\n' + text) : text;
     } else {
+      text = refineForField(f, text);
       input.value = text;
       input.classList.remove('needs-check', 'has-candidates', 'ocr-filled');
     }
@@ -2675,7 +2806,8 @@
   // 動作確認用（読み取りロジックだけを外から試せるようにしている）
   window.meishiDebug = {
     parseCardText: parseCardText, parseCardLines: parseCardLines, warpQuad: warpQuad,
-    combinePasses: combinePasses, decideField: decideField, organizeLines: organizeLines, isLineUsed: isLineUsed, pickCompany: pickCompany
+    combinePasses: combinePasses, decideField: decideField, organizeLines: organizeLines, isLineUsed: isLineUsed, pickCompany: pickCompany,
+    readEmail: readEmail, refineForField: refineForField, findGraphics: findGraphics
   };
 
   loadTemplate();
