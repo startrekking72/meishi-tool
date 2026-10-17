@@ -143,6 +143,8 @@
     position: relative;
     box-shadow: var(--shadow);
   }
+  .card.highlight { outline: 3px solid var(--accent, #2563eb); outline-offset: 2px; }
+  .dash-copy { width: 100%; min-height: 90px; font-size: 12px; margin-top: 8px; }
   .card-name { font-size: 16px; font-weight: 700; margin: 0 0 2px; }
   .card-sub { font-size: 13px; color: var(--sub); margin: 0 0 8px; }
   .card-row { font-size: 13px; margin: 2px 0; display: flex; gap: 6px; }
@@ -416,6 +418,7 @@
   </section>
 
   <div class="toolbar">
+    <button id="dashBtn">ダッシュボードへ送る</button>
     <button id="exportBtn">JSONで書き出す（写真つき）</button>
     <button id="exportCsvBtn">CSVで書き出す</button>
     <label class="file-btn" id="importLabel">
@@ -599,6 +602,8 @@
   var saveBtn = document.getElementById('saveBtn');
   var cancelEditBtn = document.getElementById('cancelEditBtn');
   var exportBtn = document.getElementById('exportBtn');
+  var dashBtn = document.getElementById('dashBtn');
+  var DASH_SENT_KEY = 'dejiina_meishi_tool_dashboard_sent';
   var exportCsvBtn = document.getElementById('exportCsvBtn');
   var clearBtn = document.getElementById('clearBtn');
   var importInput = document.getElementById('importInput');
@@ -2810,10 +2815,60 @@
     readEmail: readEmail, refineForField: refineForField, findGraphics: findGraphics
   };
 
+  // ---- AI社員ダッシュボードへ送る（電話・携帯・メール・住所・写真は含めない） ----
+  function dashSent() { try { return JSON.parse(lsGet(DASH_SENT_KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function dashPayload(list) {
+    return JSON.stringify({ kind: 'meishi-to-dashboard', version: 1, cards: list.map(function (c) {
+      return { id: c.id, name: c.name || '', company: c.company || '', department: c.department || '', title: c.title || '',
+        metDate: c.metDate || '', eventName: c.eventName || '', memo: c.memo || '', createdAt: c.createdAt || 0, mailOpenedAt: c.mailOpenedAt || 0 };
+    }) });
+  }
+  dashBtn.addEventListener('click', function () {
+    var sent = dashSent();
+    var list = cards.filter(function (c) { return !sent[c.id] || (c.updatedAt || 0) > sent[c.id]; });
+    var all = false;
+    if (list.length === 0) { list = cards.slice(); all = true; }
+    if (list.length === 0) { setStatus('送る名刺がありません'); return; }
+    var text = dashPayload(list);
+    function markSent() {
+      list.forEach(function (c) { sent[c.id] = c.updatedAt || Date.now(); });
+      lsSet(DASH_SENT_KEY, JSON.stringify(sent));
+    }
+    function showBox() {
+      var box = document.getElementById('dashCopyBox');
+      if (!box) { box = document.createElement('textarea'); box.id = 'dashCopyBox'; box.className = 'dash-copy'; box.readOnly = true; dashBtn.parentNode.appendChild(box); }
+      box.value = text; box.focus(); box.select();
+    }
+    var label = (all ? '全' : '新しい名刺・更新した名刺 ') + list.length + ' 件';
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        markSent(); setStatus(label + 'をコピーしました。ダッシュボードの「名刺を取り込む」に貼り付けてください');
+      }).catch(function () { markSent(); showBox(); setStatus(label + 'を下の欄に出しました。全部選んでコピーし、ダッシュボードに貼り付けてください'); });
+    } else { markSent(); showBox(); setStatus(label + 'を下の欄に出しました。全部選んでコピーし、ダッシュボードに貼り付けてください'); }
+  });
+
+  // ダッシュボードのリンク（#card=名刺ID）からその名刺を開く
+  function openCardFromHash() {
+    var m = /^#card=(.+)$/.exec((typeof location !== 'undefined' && location.hash) || '');
+    if (!m) return;
+    var id = decodeURIComponent(m[1]);
+    var el = cardList.querySelector('.card[data-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
+    if (!el) {
+      searchInput.value = ''; unsentOnly.checked = false; render();
+      el = cardList.querySelector('.card[data-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
+    }
+    if (!el) { setStatus('この名刺はこの端末に保存されていません（登録した端末で開いてください）'); return; }
+    el.classList.add('highlight');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setStatus('ダッシュボードから開きました。「お礼メールを作成」でメールの下書きを作れます');
+  }
+  if (typeof window.addEventListener === 'function') window.addEventListener('hashchange', openCardFromHash);
+
   loadTemplate();
   init().then(function () {
     clearForm();
     render();
+    openCardFromHash();
   });
 })();
 </script>
