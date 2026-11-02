@@ -179,6 +179,7 @@
     padding: 30px 10px;
   }
   .hint { font-size: 12px; color: var(--sub); line-height: 1.6; margin-top: 8px; }
+  .hint.warn { color: var(--danger); }
   footer { padding: 10px 16px 24px; font-size: 11px; color: var(--sub); text-align: center; }
 
   .photo-row { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -517,6 +518,11 @@
     <div class="modal-box">
       <h2>お礼メール</h2>
       <div class="field full">
+        <label>送信元</label>
+        <input type="email" id="mailFromOut" readonly>
+      </div>
+      <div class="hint warn" id="mailFromWarn">送信元はメールアプリ側で決まります。送信前に、差出人が上の送信元アドレスになっていることを必ず確認してください。</div>
+      <div class="field full">
         <label>宛先</label>
         <input type="email" id="mailToOut" placeholder="example@example.com">
       </div>
@@ -530,7 +536,7 @@
       </div>
       <label class="check-row">
         <input type="checkbox" id="mailConfirmChk">
-        宛先と本文を確認しました
+        送信元・宛先・本文を確認しました
       </label>
       <div class="form-actions">
         <button class="btn-primary" id="mailOpenBtn" disabled>メールアプリで下書きを開く</button>
@@ -542,7 +548,7 @@
         <button id="mailCopyBtn">本文をコピー</button>
         <button id="mailCloseBtn">閉じる</button>
       </div>
-      <div class="hint">このツールがメールを送信することはありません。「下書きを開く」を押すと、宛先・件名・本文が入った作成画面が開くだけです。送信はメールアプリ側でご自身の操作で行ってください。「メールアプリで下書きを開く」は端末の既定のメールアプリ、「Gmail（ブラウザ）」はブラウザ版Gmailの作成画面を開きます。</div>
+      <div class="hint">このツールがメールを送信することはありません。「下書きを開く」を押すと、宛先・件名・本文が入った作成画面が開くだけです。送信はメールアプリ側でご自身の操作で行ってください。「メールアプリで下書きを開く」は端末の既定のメールアプリ、「Gmail（ブラウザ）」はブラウザ版Gmailの作成画面を開きます。「Gmail（ブラウザ）」は送信元のアカウントを指定して開きます（そのブラウザで送信元のアカウントにログインしている必要があります）。「メールアプリ」は仕組み上、送信元を指定できないため、アプリ側で差出人を切り替えてください。</div>
     </div>
   </div>
   <div class="hint">
@@ -569,6 +575,8 @@
   var DB_NAME = 'dejiina_meishi_db';
   var DB_VERSION = 1;
   var STORE = 'cards';
+  // お礼メールの送信元。メールアプリ側の差出人がこれと違うまま送らないよう、下書きを開く前に確認してもらう
+  var MAIL_FROM = 'arcly4@gmail.com';
   var TESSERACT_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
 
   var db = null;
@@ -626,6 +634,7 @@
   var saveTemplateBtn = document.getElementById('saveTemplateBtn');
   var resetTemplateBtn = document.getElementById('resetTemplateBtn');
   var mailModal = document.getElementById('mailModal');
+  var mailFromOut = document.getElementById('mailFromOut');
   var mailToOut = document.getElementById('mailToOut');
   var mailSubjectOut = document.getElementById('mailSubjectOut');
   var mailBodyOut = document.getElementById('mailBodyOut');
@@ -844,15 +853,18 @@
 
   // ---- お礼メール（下書きを開くだけ。このツールからの送信は行わない） ----
   // 下書きの渡し先。将来 Gmail API での下書き作成などを追加する場合は、ここに
-  // { to, subject, body } を受け取る関数を足してボタンを結びつける。
+  // { from, to, subject, body } を受け取る関数を足してボタンを結びつける。
   var mailChannels = {
+    // mailto: には送信元を指定する仕組みがない（RFC 6068）。差出人は既定のメールアプリの設定のまま
     mailto: function (draft) {
       window.location.href = 'mailto:' + encodeURIComponent(draft.to).replace(/%40/g, '@') +
         '?subject=' + encodeURIComponent(draft.subject) +
         '&body=' + encodeURIComponent(draft.body);
     },
+    // authuser で送信元のアカウントの作成画面を開く（そのアカウントでログインしていなければ、ログイン画面かアカウント選択になる）
     gmailWeb: function (draft) {
-      window.open('https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(draft.to) +
+      window.open('https://mail.google.com/mail/?authuser=' + encodeURIComponent(draft.from) +
+        '&view=cm&fs=1&to=' + encodeURIComponent(draft.to) +
         '&su=' + encodeURIComponent(draft.subject) +
         '&body=' + encodeURIComponent(draft.body), '_blank');
     }
@@ -866,6 +878,7 @@
 
   function openMailModal(card) {
     currentMailCard = card;
+    mailFromOut.value = MAIL_FROM;
     mailToOut.value = card.mailTo || card.email || '';
     mailSubjectOut.value = card.mailSubject || fillTemplate(mailTemplate.subject, card);
     mailBodyOut.value = card.mailBody || fillTemplate(mailTemplate.body, card);
@@ -895,14 +908,44 @@
     }).catch(saveFailed);
   }
 
+  // 署名に送信元と違うメールアドレスが書かれていれば、その並びを返す（別のアカウントから送る文面になっている疑い）
+  function otherSenderAddresses() {
+    var found = (mailTemplate.sender || '').match(/[^\s@<>()「」（）：:,、]+@[^\s@<>()「」（）,、]+\.[A-Za-z]{2,}/g) || [];
+    return found.filter(function (a) { return a.toLowerCase() !== MAIL_FROM.toLowerCase(); });
+  }
+
+  // 下書きを開く前の送信元の確認。キャンセルされたら false
+  function confirmSender(channel) {
+    var lines = [];
+    var others = otherSenderAddresses();
+    if (others.length) {
+      lines.push('【注意】署名に送信元と異なるメールアドレス（' + others.join('、') + '）が入っています。');
+      lines.push('');
+    }
+    lines.push('送信元：' + MAIL_FROM);
+    lines.push('');
+    if (channel === 'gmailWeb') {
+      lines.push('Gmailをこの送信元のアカウントで開きます。');
+      lines.push('作成画面の「From（差出人）」が ' + MAIL_FROM + ' になっているか、送信前に確認してください。');
+      lines.push('別のアカウントやログイン画面が開いた場合は、' + MAIL_FROM + ' に切り替えてから送信してください。');
+    } else {
+      lines.push('メールアプリには送信元を自動で指定できません（アプリの既定のアカウントで作成画面が開きます）。');
+      lines.push('差出人が ' + MAIL_FROM + ' でなければ、アプリ側で差出人を切り替えてから送信してください。');
+    }
+    lines.push('');
+    lines.push('下書きを開きますか？');
+    return confirm(lines.join('\n'));
+  }
+
   function openDraft(channel) {
     if (!currentMailCard || !mailConfirmChk.checked) return;
-    var draft = { to: mailToOut.value.trim(), subject: mailSubjectOut.value, body: mailBodyOut.value };
+    var draft = { from: MAIL_FROM, to: mailToOut.value.trim(), subject: mailSubjectOut.value, body: mailBodyOut.value };
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.to)) {
       alert('宛先のメールアドレスを確認してください。');
       mailToOut.focus();
       return;
     }
+    if (!confirmSender(channel)) return;
     // 画面がメールアプリに切り替わる前に保存を始めておく
     saveMailDraft({ mailOpenedAt: Date.now() }, 'メールの下書きを開きました（送信はメールアプリで行ってください）');
     mailChannels[channel](draft);
