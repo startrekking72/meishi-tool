@@ -186,6 +186,9 @@
   footer { padding: 10px 16px 24px; font-size: 11px; color: var(--sub); text-align: center; }
 
   .photo-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .side-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  .side-tabs button { flex: 1 1 0; justify-content: center; padding: 8px 10px; font-size: 13px; }
+  .side-tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
   #photoPreviewWrap { margin-top: 10px; }
   #photoPreview {
     max-width: 100%;
@@ -334,7 +337,12 @@
     <h2 id="formTitle">新しい名刺を追加</h2>
     <div class="form-grid">
       <div class="field full">
-        <label>名刺の写真</label>
+        <label>名刺の写真（表面・裏面の2枚まで）</label>
+        <div class="side-tabs" id="sideTabs">
+          <button type="button" class="active" data-side="front">表面</button>
+          <button type="button" data-side="back">裏面</button>
+        </div>
+        <div class="hint" id="sideHint" style="margin:0 0 8px;"></div>
         <div class="photo-row">
           <label class="file-btn btn-primary btn-big" id="cameraLabel">
             カメラで撮影
@@ -619,6 +627,8 @@
   var photoInput = document.getElementById('f_photoInput');
   var cameraInput = document.getElementById('f_cameraInput');
   var removePhotoBtn = document.getElementById('removePhotoBtn');
+  var sideTabs = document.getElementById('sideTabs');
+  var sideHint = document.getElementById('sideHint');
   var photoPreviewWrap = document.getElementById('photoPreviewWrap');
   var photoPreview = document.getElementById('photoPreview');
   var ocrBtn = document.getElementById('ocrBtn');
@@ -659,6 +669,11 @@
   // 補正・回転する前の写真。補正後の写真（currentPhotoDataUrl）とは別に残す
   var originalPhotoDataUrl = '';
   var ocrUsed = false;
+  // 名刺の表面・裏面。上の3つの変数は「いま選んでいる面」の写真で、選んでいないほうの面はここに預けておく
+  var SIDE_LABELS = { front: '表面', back: '裏面' };
+  var activeSide = 'front';
+  var sidePhotos = { front: emptySide(), back: emptySide() };
+  function emptySide() { return { photo: '', original: '', ocrSource: null }; }
 
   function pad(n) { return String(n).padStart(2, '0'); }
   function formatNow() {
@@ -1064,19 +1079,57 @@
     ocrCandidates.innerHTML = '';
   }
 
-  function showPhotoPreview(dataUrl) {
+  // keepOcr は面を切り替えただけのとき。写真は変わっていないので、読み取り結果は消さない
+  function showPhotoPreview(dataUrl, keepOcr) {
     photoPreview.src = dataUrl;
     photoPreviewWrap.style.display = 'block';
     removePhotoBtn.style.display = 'inline-flex';
-    resetOcrResult();
+    if (!keepOcr) resetOcrResult();
+    updateSideTabs();
   }
 
-  function hidePhotoPreview() {
+  function hidePhotoPreview(keepOcr) {
     photoPreview.removeAttribute('src');
     photoPreviewWrap.style.display = 'none';
     removePhotoBtn.style.display = 'none';
-    resetOcrResult();
+    if (!keepOcr) resetOcrResult();
+    updateSideTabs();
   }
+
+  // ---- 表面・裏面の切り替え ----
+  function sidePhoto(side) { return side === activeSide ? currentPhotoDataUrl : sidePhotos[side].photo; }
+
+  // いま選んでいる面の写真を預け先にも書き写す（保存するときや面を切り替えるとき）
+  function stashSide() {
+    sidePhotos[activeSide] = { photo: currentPhotoDataUrl, original: originalPhotoDataUrl, ocrSource: ocrSourceImage };
+  }
+
+  function switchSide(side) {
+    if (side === activeSide) return;
+    stashSide();
+    activeSide = side;
+    var s = sidePhotos[side];
+    currentPhotoDataUrl = s.photo;
+    originalPhotoDataUrl = s.original;
+    ocrSourceImage = s.ocrSource;
+    if (currentPhotoDataUrl) showPhotoPreview(currentPhotoDataUrl, true); else hidePhotoPreview(true);
+  }
+
+  function updateSideTabs() {
+    Array.prototype.forEach.call(sideTabs.querySelectorAll('button'), function (btn) {
+      var side = btn.getAttribute('data-side');
+      btn.classList[side === activeSide ? 'add' : 'remove']('active');
+      btn.textContent = SIDE_LABELS[side] + (sidePhoto(side) ? '（写真あり）' : '');
+    });
+    sideHint.textContent = activeSide === 'front'
+      ? 'いまは表面の写真です。裏面に住所・電話番号・QRコードなどがある名刺は、「裏面」を押して裏面も撮影してください。'
+      : 'いまは裏面の写真です。「写真から自動読み取り」を押すと、表面と裏面の両方から読み取ります。';
+  }
+
+  sideTabs.addEventListener('click', function (e) {
+    var side = e.target.getAttribute && e.target.getAttribute('data-side');
+    if (side) switchSide(side);
+  });
 
   function loadImage(file, callback) {
     var reader = new FileReader();
@@ -1122,7 +1175,8 @@
         var d = new Date();
         metDateField.value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
       }
-      setStatus('写真を追加しました（名刺交換日は今日の日付を自動入力。必要であれば手動で変更できます）');
+      setStatus(SIDE_LABELS[activeSide] + 'の写真を追加しました（名刺交換日は今日の日付を自動入力。必要であれば手動で変更できます）' +
+        (activeSide === 'front' && !sidePhotos.back.photo ? '。裏面にも情報があれば「裏面」を押して撮影してください' : ''));
     });
   }
 
@@ -1475,12 +1529,271 @@
     return canvas;
   }
 
-  // 写真を quarter×90度（時計回り）回した向きで見たときの rect（0〜1の割合）の範囲を切り出して白黒にする。
-  // 大きさは長辺 maxDim 以内（wantScale があればその倍率）。skew は文字の傾き（ラジアン）で、その分だけ逆に回して水平に直す
-  function renderForOcr(img, rect, maxDim, wantScale, quarter, skew) {
-    return binarizeCanvas(drawRegion(img, rect, maxDim, wantScale, quarter, skew));
+  // 濃い背景に明るい文字（緑や紺の帯に白抜きの文字など）の部分を見つけ、その部分だけ「白い地に濃い文字」に描き換える。
+  // 以降の処理は「明るい紙に濃い文字」を前提にしているので、そのままだと白抜きの文字は消えてしまう。
+  // cell はマス目の大きさ(px)、minWidth は対象にする帯の最小の幅(px)。描き換えた帯の範囲（0〜1の割合の矩形）の並びを返す
+  function invertDarkRegions(canvas, cell, minWidth) {
+    var W = canvas.width, H = canvas.height;
+    var ctx = canvas.getContext('2d');
+    var d = ctx.getImageData(0, 0, W, H);
+    var px = d.data;
+    var gw = Math.ceil(W / cell), gh = Math.ceil(H / cell), n = gw * gh;
+    function grayAt(i) { return (px[i] * 77 + px[i + 1] * 150 + px[i + 2] * 29) >> 8; }
+    // マスごとの明るさの分布（8段階刻み）
+    var hist = new Uint32Array(n * 32);
+    var x, y, i, c;
+    for (y = 0; y < H; y++) {
+      var rowBase = Math.floor(y / cell) * gw;
+      for (x = 0; x < W; x++) {
+        hist[(rowBase + Math.floor(x / cell)) * 32 + (grayAt((y * W + x) * 4) >> 3)]++;
+      }
+    }
+    // seed: 濃い地に明るい文字があるマス。plain: 暗い側がそろっている（＝地の色が1色で、それより濃いものがない）マス。
+    // tone: 地の明るさ（下から4分の1の位置。文字が多いマスでも地の色を指す）、bright・dim: 明るい側・暗い側の端
+    var seed = new Uint8Array(n), plain = new Uint8Array(n), tone = new Uint8Array(n), bright = new Uint8Array(n), dim = new Uint8Array(n);
+    // inked: 明るい地に濃い文字があるマス（seed の逆）
+    var inked = new Uint8Array(n);
+    for (c = 0; c < n; c++) {
+      var total = 0, bin;
+      for (bin = 0; bin < 32; bin++) total += hist[c * 32 + bin];
+      if (!total) continue;
+      var acc = 0, p5 = -1, p25 = -1, med = -1, p95 = -1;
+      for (bin = 0; bin < 32; bin++) {
+        acc += hist[c * 32 + bin];
+        if (p5 < 0 && acc >= total * 0.05) p5 = bin * 8 + 4;
+        if (p25 < 0 && acc >= total * 0.25) p25 = bin * 8 + 4;
+        if (med < 0 && acc >= total * 0.5) med = bin * 8 + 4;
+        if (p95 < 0 && acc >= total * 0.95) { p95 = bin * 8 + 4; break; }
+      }
+      tone[c] = p25;
+      bright[c] = p95;
+      dim[c] = p5;
+      if (p25 - p5 < 24) plain[c] = 1;
+      // 地の色より明るい側にだけ大きく外れた画素がある＝濃い地に明るい文字。影の中の帯では差が小さいので下限は低めにする
+      if (p95 - med >= 32 && p95 - med >= (med - p5) * 2 && med <= 176) seed[c] = 1;
+      if (med - p5 >= 48 && med - p5 >= (p95 - med) * 2) inked[c] = 1;
+    }
+    // マスごとの地の色（地の明るさに近い画素の平均色）。明るさが似ていても色が違う面（緑の帯と灰色の机など）を分けるために使う
+    var sumR = new Float64Array(n), sumG = new Float64Array(n), sumB = new Float64Array(n), cnt = new Uint32Array(n);
+    for (y = 0; y < H; y++) {
+      var rowBase2 = Math.floor(y / cell) * gw;
+      for (x = 0; x < W; x++) {
+        c = rowBase2 + Math.floor(x / cell);
+        i = (y * W + x) * 4;
+        if (grayAt(i) > tone[c] + 12) continue;
+        sumR[c] += px[i]; sumG[c] += px[i + 1]; sumB[c] += px[i + 2]; cnt[c]++;
+      }
+    }
+    // マスの並び members の地の色が「帯の色」と言えるか。色のついた面（緑・紺など）か、黒に近い濃い面だけを帯とする。
+    // 影のかかった白い紙や灰色の机は、明るさだけ見ると帯と紛らわしいが、色みがなく黒ほど濃くもないので除く
+    // （これを帯として描き換えると、影の中の紙に書かれた濃い文字のまわりが継ぎはぎになって読めなくなる）
+    function looksLikeBand(members) {
+      var r = 0, g = 0, b = 0, count = 0;
+      members.forEach(function (m) { r += sumR[m]; g += sumG[m]; b += sumB[m]; count += cnt[m]; });
+      if (!count) return false;
+      r /= count; g /= count; b /= count;
+      var hi = Math.max(r, g, b), lo = Math.min(r, g, b);
+      return (hi > 0 && (hi - lo) / hi >= 0.25) || (r * 77 + g * 150 + b * 29) / 256 <= 80;
+    }
+    function colorGap(p, q) {
+      if (!cnt[p] || !cnt[q]) return 999;
+      return Math.max(Math.abs(sumR[p] / cnt[p] - sumR[q] / cnt[q]), Math.abs(sumG[p] / cnt[p] - sumG[q] / cnt[q]), Math.abs(sumB[p] / cnt[p] - sumB[q] / cnt[q]));
+    }
+
+    // owner: そのマスが属するまとまりの番号（0＝未調査、-1＝帯ではなかった）。inBand: 帯と認めたマス。
+    // ground・contrast: 帯のマスごとの「地の明るさ」と「文字が地よりどれだけ明るいか」。0 のマスは周りから補う
+    var owner = new Int32Array(n), inBand = new Uint8Array(n);
+    // 囲まれた部分を調べるときの目印（調べたまとまりの番号を入れる）
+    var visited = new Int32Array(n);
+    var ground = new Float32Array(n), contrast = new Float32Array(n);
+    var regions = [];
+    // 帯と認めたまとまり（マス目での上下の範囲）と、文字がなくて帯と認めなかった平らな面
+    var bandRows = [], textless = [];
+    for (var start = 0; start < n; start++) {
+      if (!seed[start] || owner[start]) continue;
+      // 明るい文字のあるマスから、同じ地の色のマスへ広げて、帯全体をひとまとまりにする
+      var id = start + 1;
+      var stack = [start], members = [], blank = 0;
+      var minX = gw, minY = gh, maxX = 0, maxY = 0;
+      owner[start] = id;
+      while (stack.length) {
+        var cur = stack.pop();
+        var cx = cur % gw, cy = (cur - cx) / gw;
+        members.push(cur);
+        // 文字のない、地の色だけのマス
+        if (!seed[cur] && bright[cur] - tone[cur] < 24) blank++;
+        if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+        var near = [cx > 0 ? cur - 1 : -1, cx < gw - 1 ? cur + 1 : -1, cy > 0 ? cur - gw : -1, cy < gh - 1 ? cur + gw : -1];
+        for (var k = 0; k < 4; k++) {
+          var nb = near[k];
+          if (nb < 0 || owner[nb] || !plain[nb]) continue;
+          // 隣と色が連続していて、出発点の帯の色からも離れすぎていないマスだけをつなぐ（影によるゆるやかな変化は許す）
+          if (colorGap(nb, cur) > 22 || colorGap(nb, start) > 70) continue;
+          owner[nb] = id;
+          stack.push(nb);
+        }
+      }
+      var bw = maxX - minX + 1, bh = maxY - minY + 1;
+      // 文字のあるマスのうち、帯の内側にあるもの（四方が同じ帯のマス）。濃い色の机に置いた名刺では、名刺のふちのマスが
+      // 「濃い地に明るい文字」に見えるが、それは机の面の外周にしかないので、内側のものだけを数えれば机を帯と間違えない
+      var gaps = [];
+      members.forEach(function (m) {
+        if (!seed[m]) return;
+        var ix = m % gw, iy = (m - ix) / gw;
+        if (ix > 0 && iy > 0 && ix < gw - 1 && iy < gh - 1 &&
+          owner[m - 1] === id && owner[m + 1] === id && owner[m - gw] === id && owner[m + gw] === id) gaps.push(bright[m] - tone[m]);
+      });
+      // 太い文字の線の内側も「濃い地に明るい点」に見えるので、横に長く、外枠をほぼ埋めている面だけを帯とみなす。
+      // さらに、帯には文字のない地だけのマスがまとまってあるはずなので、それが3割に満たないもの（太字の文字の並びなど）は除く
+      // この面にすっかり囲まれた「明るい地に濃い文字」のマスの数。影のかかった紙は、机の模様のせいで帯と紛らわしいが、
+      // 中に濃い文字の行が島のように並んでいるので見分けられる（帯として描き換えると、文字のまわりが継ぎはぎになって読めなくなる）。
+      // 外枠の端まで続いているもの（帯からはみ出す顔写真など）は囲まれているとはみなさない
+      var inkedInside = 0;
+      for (var qy = minY; qy <= maxY; qy++) {
+        for (var qx = minX; qx <= maxX; qx++) {
+          var q0 = qy * gw + qx;
+          if (owner[q0] === id || visited[q0] === id) continue;
+          var island = [q0], open = false, inkCount = 0;
+          visited[q0] = id;
+          while (island.length) {
+            var qc = island.pop();
+            var ux = qc % gw, uy = (qc - ux) / gw;
+            if (inked[qc]) inkCount++;
+            if (ux === minX || ux === maxX || uy === minY || uy === maxY) open = true;
+            var around4 = [ux > minX ? qc - 1 : -1, ux < maxX ? qc + 1 : -1, uy > minY ? qc - gw : -1, uy < maxY ? qc + gw : -1];
+            for (var a4 = 0; a4 < 4; a4++) {
+              var nq = around4[a4];
+              if (nq < 0 || owner[nq] === id || visited[nq] === id) continue;
+              visited[nq] = id;
+              island.push(nq);
+            }
+          }
+          if (!open) inkedInside += inkCount;
+        }
+      }
+      // 帯の中の小さな図柄（アイコンや、帯に食い込んだ顔写真）でも数マスは数えられるので、白抜き文字のマス数と比べて判断する
+      var banded = looksLikeBand(members) && inkedInside <= Math.max(8, gaps.length * 0.75);
+      if (!banded || bw * cell < minWidth || bh < 2 || gaps.length < 3 || members.length < bw * bh * 0.6 || blank < members.length * 0.3) {
+        members.forEach(function (m) { owner[m] = -1; });
+        // 文字はないが、地の色だけで外枠をほぼ埋めている面は、あとで「帯の続き」かどうかを調べる
+        if (banded && members.length >= bw * bh * 0.6 && blank >= members.length * 0.6) textless.push({ members: members, minY: minY, maxY: maxY, rows: bh });
+        continue;
+      }
+      bandRows.push({ minY: minY, maxY: maxY });
+      // この帯で、文字が地よりどれだけ明るいか（文字のあるマスの中央値）
+      gaps.sort(function (p, q) { return p - q; });
+      var gap = Math.max(24, gaps[Math.floor((gaps.length - 1) / 2)]);
+      members.forEach(function (m) { inBand[m] = 1; ground[m] = tone[m]; contrast[m] = gap; });
+      // 太い白抜き文字でほぼ埋まったマスは地の色が分からず取り残されるので、帯に3方以上を囲まれていれば帯に含める。
+      // ただし帯の地より暗い画素があるマス（明るい紙に濃い文字、など）は白抜き文字ではないので加えない
+      for (var round = 0; round < 2; round++) {
+        for (var hy = minY; hy <= maxY; hy++) {
+          for (var hx = minX; hx <= maxX; hx++) {
+            var hc = hy * gw + hx;
+            if (owner[hc] === id || dim[hc] < tone[start] - 16) continue;
+            var around = (hx > 0 && owner[hc - 1] === id ? 1 : 0) + (hx < gw - 1 && owner[hc + 1] === id ? 1 : 0) +
+              (hy > 0 && owner[hc - gw] === id ? 1 : 0) + (hy < gh - 1 && owner[hc + gw] === id ? 1 : 0);
+            if (around >= 3) { owner[hc] = id; inBand[hc] = 1; }
+          }
+        }
+      }
+      regions.push({ x: minX * cell / W, y: minY * cell / H, w: Math.min(W, (maxX + 1) * cell) / W - minX * cell / W, h: Math.min(H, (maxY + 1) * cell) / H - minY * cell / H });
+    }
+    if (!regions.length) return regions;
+
+    // 帯の一部に影がかかると、影の外の部分は色が違うため別の面になる。そこに文字がなければ帯とは認められず、
+    // 濃い色のまま残って、帯との境目が黒い線として読まれてしまう。帯と上下の範囲が重なり、横に長く接している
+    // 平らな面は、同じ帯の続きとして一緒に白くする
+    textless.forEach(function (t) {
+      if (!bandRows.some(function (r) { return t.minY >= r.minY - 2 && t.maxY <= r.maxY + 2; })) return;
+      var touching = 0, borrowed = 0;
+      t.members.forEach(function (m) {
+        var tx = m % gw;
+        // 境目のマスはどちらにも入っていないので、1マス空けた隣まで見る
+        var side = (tx > 1 && inBand[m - 2] ? m - 2 : 0) || (tx > 0 && inBand[m - 1] ? m - 1 : 0) ||
+          (tx < gw - 2 && inBand[m + 2] ? m + 2 : 0) || (tx < gw - 1 && inBand[m + 1] ? m + 1 : 0);
+        if (side) { touching++; borrowed = contrast[side] || borrowed; }
+      });
+      if (touching < t.rows * 0.5 || !borrowed) return;
+      t.members.forEach(function (m) { inBand[m] = 1; ground[m] = tone[m]; contrast[m] = borrowed; });
+    });
+
+    // 同じ帯が影で2つに分かれた場合、その境目のマスは明るさが混ざっていてどちらにも入らず、そのまま残ると縦の黒い筋になる。
+    // 左右または上下を帯にはさまれたマスは帯に含める。ただし、はさむ帯の地より暗い画素があるマスは含めない
+    // （影のかかった紙の上の濃い文字がこれに当たり、含めるとその文字を消してしまう）
+    var bridge = [];
+    function between(c, p, q) {
+      return inBand[p] && inBand[q] && dim[c] >= Math.min(tone[p], tone[q]) - 16;
+    }
+    for (c = 0; c < n; c++) {
+      if (inBand[c]) continue;
+      var bx = c % gw, by = (c - bx) / gw;
+      if ((bx > 0 && bx < gw - 1 && between(c, c - 1, c + 1)) || (by > 0 && by < gh - 1 && between(c, c - gw, c + gw))) bridge.push(c);
+    }
+    bridge.forEach(function (m) { inBand[m] = 2; });
+
+    // 地の明るさが分からないマス（後から加えたマス）は、まわりの分かっているマスの値で補う
+    function known(m) { return inBand[m] && ground[m] > 0; }
+    function sample(arr, gx, gy, fallback) {
+      // マスの中心どうしを結んで、位置に応じてなめらかにつなぐ（影の境目で段差が出ないようにする）
+      var x0 = Math.floor(gx), y0 = Math.floor(gy), sum = 0, weight = 0;
+      for (var dy = 0; dy <= 1; dy++) {
+        for (var dx = 0; dx <= 1; dx++) {
+          var qx = x0 + dx, qy = y0 + dy;
+          if (qx < 0 || qy < 0 || qx >= gw || qy >= gh || !known(qy * gw + qx)) continue;
+          var wgt = (dx ? gx - x0 : 1 - (gx - x0)) * (dy ? gy - y0 : 1 - (gy - y0)) + 0.001;
+          sum += arr[qy * gw + qx] * wgt;
+          weight += wgt;
+        }
+      }
+      return weight ? sum / weight : fallback;
+    }
+    for (c = 0; c < n; c++) {
+      if (!inBand[c] || ground[c] > 0) continue;
+      // すぐ隣の分かっているマスの平均（地の明るさは暗い方に寄せる：文字で明るく見積もった値に引きずられないため）
+      var fx = c % gw, fy = (c - fx) / gw, lows = [], gs = [];
+      [[fx - 1, fy], [fx + 1, fy], [fx, fy - 1], [fx, fy + 1]].forEach(function (q) {
+        if (q[0] < 0 || q[1] < 0 || q[0] >= gw || q[1] >= gh) return;
+        var qc = q[1] * gw + q[0];
+        if (inBand[qc] === 1 && ground[qc] > 0 && owner[qc] > 0 && contrast[qc] > 0) { lows.push(ground[qc]); gs.push(contrast[qc]); }
+      });
+      if (!lows.length) continue;
+      // いったん別の配列に入れず、印だけ付けてあとでまとめて確定する（補った値を次の補完に使わない）
+      inBand[c] = 3;
+      ground[c] = -(lows.reduce(function (p, q) { return p + q; }, 0) / lows.length);
+      contrast[c] = gs.reduce(function (p, q) { return p + q; }, 0) / gs.length;
+    }
+    for (c = 0; c < n; c++) { if (ground[c] < 0) ground[c] = -ground[c]; }
+
+    // 描き換え：地（とそれより暗い画素）は白、地より明るい画素ほど黒に近づける。
+    // ただ反転するだけでは、影の中の帯の文字が薄い灰色になり、後の白黒化で消えてしまうため
+    for (c = 0; c < n; c++) {
+      if (!inBand[c]) continue;
+      var mx = c % gw, my = (c - mx) / gw;
+      // 帯の縁（帯でないマスと接するところ）には紙の白い部分が混ざるので、地の色に近い濃い画素だけを置き換え、明るい画素はそのままにする
+      var edge = mx === 0 || my === 0 || mx === gw - 1 || my === gh - 1 ||
+        !inBand[c - 1] || !inBand[c + 1] || !inBand[c - gw] || !inBand[c + gw];
+      var endX = Math.min(W, (mx + 1) * cell), endY = Math.min(H, (my + 1) * cell);
+      for (var yy = my * cell; yy < endY; yy++) {
+        for (var xx = mx * cell; xx < endX; xx++) {
+          var o = (yy * W + xx) * 4;
+          var g = grayAt(o);
+          var gx = xx / cell - 0.5, gy = yy / cell - 0.5;
+          var base = sample(ground, gx, gy, tone[c]);
+          var span = sample(contrast, gx, gy, 48);
+          if (edge && g > base + 40) continue;
+          // 地との差が文字の3割に満たない画素（ざらつき）は白、8割を超えたら黒にする
+          px[o] = px[o + 1] = px[o + 2] = 255 - Math.min(255, Math.max(0, (g - base - span * 0.3) * 510 / span));
+        }
+      }
+    }
+    ctx.putImageData(d, 0, 0);
+    return regions;
   }
 
+  // 写真を quarter×90度（時計回り）回した向きで見たときの rect（0〜1の割合）の範囲を切り出す。
+  // 大きさは長辺 maxDim 以内（wantScale があればその倍率）。skew は文字の傾き（ラジアン）で、その分だけ逆に回して水平に直す
   function drawRegion(img, rect, maxDim, wantScale, quarter, skew) {
     quarter = quarter || 0;
     var src = [
@@ -1512,7 +1825,8 @@
     return l.confidence >= 60 && isMeaningful(tidy) && tidy.replace(/\s+/g, '').length >= 4;
   }
 
-  // はっきり読めた行が集まっている範囲（＝名刺の文字部分）を割合で、その行の高さ(px)とあわせて返す。見つからないときは null
+  // はっきり読めた行が集まっている範囲（＝名刺の文字部分）を割合で、その行の高さ(px)とあわせて返す。見つからないときは null。
+  // lineHeight は行の高さの中央値、smallLineHeight は小さめの行の高さ（下から4分の1の位置）
   function findTextRegion(lines, W, H) {
     var x0 = W, y0 = H, x1 = 0, y1 = 0;
     var heights = [];
@@ -1525,10 +1839,11 @@
     if (heights.length < 2) return null;
     heights.sort(function (a, b) { return a - b; });
     var lineHeight = heights[Math.floor((heights.length - 1) / 2)];
+    var smallLineHeight = heights[Math.floor((heights.length - 1) / 4)];
     var padX = Math.max((x1 - x0) * 0.12, W * 0.03), padY = Math.max((y1 - y0) * 0.2, H * 0.04);
     x0 = Math.max(0, x0 - padX); y0 = Math.max(0, y0 - padY);
     x1 = Math.min(W, x1 + padX); y1 = Math.min(H, y1 + padY);
-    return { x: x0 / W, y: y0 / H, w: (x1 - x0) / W, h: (y1 - y0) / H, lineHeight: lineHeight };
+    return { x: x0 / W, y: y0 / H, w: (x1 - x0) / W, h: (y1 - y0) / H, lineHeight: lineHeight, smallLineHeight: smallLineHeight };
   }
 
   // 白黒にした写真を少しずつ回し、文字の行がいちばんくっきり横に並ぶ角度を探して、写真の傾き（ラジアン）を返す。
@@ -1585,13 +1900,15 @@
 
   var ocrWorker = null;
   var ocrStage = '';
+  // 表裏の2枚を読むときに、いまどちらの面かを進み具合の表示に添える（例：「裏面 」）
+  var ocrSidePrefix = '';
   function getOcrWorker() {
     if (ocrWorker) return Promise.resolve(ocrWorker);
     return loadTesseract().then(function () {
       return Tesseract.createWorker('jpn+eng', 1, {
         logger: function (m) {
           if (m && m.status === 'recognizing text') {
-            ocrBtn.textContent = '読み取り中… ' + ocrStage + ' ' + Math.round((m.progress || 0) * 100) + '%';
+            ocrBtn.textContent = '読み取り中… ' + ocrSidePrefix + ocrStage + ' ' + Math.round((m.progress || 0) * 100) + '%';
           }
         }
       });
@@ -1614,13 +1931,16 @@
     });
   }
 
-  function loadOcrSource() {
-    if (ocrSourceImage) return Promise.resolve(ocrSourceImage);
+  // side を省くと、いま選んでいる面の写真
+  function loadOcrSource(side) {
+    side = side || activeSide;
+    var ready = side === activeSide ? ocrSourceImage : sidePhotos[side].ocrSource;
+    if (ready) return Promise.resolve(ready);
     return new Promise(function (resolve, reject) {
       var img = new Image();
       img.onload = function () { resolve(img); };
       img.onerror = function () { reject(new Error('写真を読み込めません')); };
-      img.src = currentPhotoDataUrl;
+      img.src = sidePhoto(side);
     });
   }
 
@@ -1639,9 +1959,13 @@
   }
 
   function scanWhole(source, quarter) {
-    var canvas = renderForOcr(source, { x: 0, y: 0, w: 1, h: 1 }, 1800, null, quarter, 0);
+    var canvas = drawRegion(source, { x: 0, y: 0, w: 1, h: 1 }, 1800, null, quarter, 0);
+    // 白抜き文字の帯を反転しておく。文字の大きさがまだ分からない段階なので、マス目と帯の最小幅は画像の大きさから決める
+    var longSide = Math.max(canvas.width, canvas.height);
+    var bands = invertDarkRegions(canvas, Math.max(8, Math.round(longSide / 110)), longSide * 0.1);
+    binarizeCanvas(canvas);
     return recognize(canvas, '11', '(向きを確認中)').then(function (lines) {
-      return { quarter: quarter, canvas: canvas, lines: lines, score: orientationScore(lines) };
+      return { quarter: quarter, canvas: canvas, lines: lines, score: orientationScore(lines), bands: bands };
     });
   }
 
@@ -1664,14 +1988,23 @@
     });
   }
 
-  // メールアドレスの行だけを切り出し、メールに使える文字に限定して読み直す
-  function rereadEmailLine(canvas, lines) {
-    var line = null;
-    lines.forEach(function (l) {
-      if (!line && l.bbox && l.confidence >= 30 && (l.text || '').indexOf('@') !== -1) line = l;
-    });
-    if (!line) return Promise.resolve('');
+  // 読み取った行の中からメールアドレスの行を探し、その範囲を画像に対する割合（0〜1）で返す。見つからなければ null
+  function emailLineBox(canvas, lines) {
+    // アドレスの形になっている行を優先する。アイコンや図柄が隣にあると行全体の信頼度は低く出るので、信頼度は問わない。
+    // 見つからなければ「@」を含む行を使う（アイコンを「@」と読んだだけの行を先に拾わないよう、後回しにする）
+    var line = lines.filter(function (l) { return l.bbox && hasEmail(normalizeOcrText(l.text || '')); })[0] ||
+      lines.filter(function (l) { return l.bbox && l.confidence >= 30 && (l.text || '').indexOf('@') !== -1; })[0];
+    if (!line) return null;
     var b = { x0: line.bbox.x0, y0: line.bbox.y0, x1: line.bbox.x1, y1: line.bbox.y1 };
+    // 行の両端にあるアイコンや図柄（記号として読まれた部分）は外し、英数字を含む語の範囲だけにする。
+    // 黒い丸のアイコンなどが一緒に入ると、行の高さが実際の文字より大きく出て、読み直しでアドレスを読めなくなる
+    var words = (line.words || []).filter(function (w) { return w.bbox && /[A-Za-z0-9]/.test(w.text || ''); });
+    if (words.length) {
+      b.x0 = Math.max(b.x0, Math.min.apply(null, words.map(function (w) { return w.bbox.x0; })));
+      b.x1 = Math.min(b.x1, Math.max.apply(null, words.map(function (w) { return w.bbox.x1; })));
+      b.y0 = Math.max(b.y0, Math.min.apply(null, words.map(function (w) { return w.bbox.y0; })));
+      b.y1 = Math.min(b.y1, Math.max.apply(null, words.map(function (w) { return w.bbox.y1; })));
+    }
     var height = b.y1 - b.y0;
     // アドレスが途中で別の行として切れていることがあるので、同じ高さですぐ隣にある英数字の切れ端はつなげる
     lines.forEach(function (l) {
@@ -1681,10 +2014,25 @@
       if (l.bbox.x1 <= b.x0 && b.x0 - l.bbox.x1 < height * 2) b.x0 = l.bbox.x0;
       if (l.bbox.x0 >= b.x1 && l.bbox.x0 - b.x1 < height * 2) b.x1 = l.bbox.x1;
     });
+    // この行だけではアドレスとして完成していない（「name@」で切れている、など）ときは、行が途中で切れて読まれている。
+    // 残りは同じ高さの左右にあるはずなので、左は行の高さ3つ分、右は画像の端まで広げて読み直す
+    if (!extractEmail([normalizeOcrText(line.text || '')])) {
+      b.x0 = Math.max(0, b.x0 - height * 3);
+      b.x1 = canvas.width;
+    }
+    return { x0: b.x0 / canvas.width, y0: b.y0 / canvas.height, x1: b.x1 / canvas.width, y1: b.y1 / canvas.height };
+  }
+
+  // box（画像に対する割合）の範囲を切り出し、メールに使える文字に限定して読み直す
+  function rereadEmailLine(canvas, box) {
+    if (!box) return Promise.resolve('');
+    var b = { x0: box.x0 * canvas.width, y0: box.y0 * canvas.height, x1: box.x1 * canvas.width, y1: box.y1 * canvas.height };
+    var height = b.y1 - b.y0;
     var pad = Math.round(height * 0.3);
+    // 行の終わり（「.com」の最後の文字など）が外枠から漏れていることがあるので、右は広めに取る
     var side = Math.round(height * 0.8);
     var sx = Math.max(0, b.x0 - side), sy = Math.max(0, b.y0 - pad);
-    var sw = Math.min(canvas.width, b.x1 + side) - sx, sh = Math.min(canvas.height, b.y1 + pad) - sy;
+    var sw = Math.min(canvas.width, b.x1 + side * 3) - sx, sh = Math.min(canvas.height, b.y1 + pad) - sy;
     var scale = Math.max(0.5, Math.min(3, 48 / Math.max(1, height)));
     var margin = 20;
     var strip = document.createElement('canvas');
@@ -2106,6 +2454,26 @@
   var OCR_FIELDS = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address'];
   var OCR_LABELS = { name: '氏名', company: '会社名', department: '部署', title: '役職', phone: '電話番号', mobile: '携帯電話番号', email: 'メールアドレス', address: '住所' };
 
+  // 文字のある範囲 region を、白抜き文字の帯 bands も収まるように広げる。帯の中の文字は写真全体を読む段階では
+  // 小さくて読めないことがあり、そのままだと帯ごと範囲の外に切り落とされてしまう。
+  // 同じ理由で、行の高さは読めた行のうち小さめのものに合わせる（大きな見出しに合わせると、帯の中の小さな文字がつぶれる）
+  function includeBands(region, bands) {
+    if (!region) return region;
+    var x0 = region.x, y0 = region.y, x1 = region.x + region.w, y1 = region.y + region.h;
+    // 対象にするのは、文字の範囲と横の位置がほぼ重なる帯（名刺の上下にある帯）だけ。
+    // 文字の範囲より左右に大きくはみ出す面は、名刺の中の帯ではなく名刺の外（机や影）とみなす
+    var slack = region.w * 0.25;
+    bands = bands.filter(function (b) {
+      return b.x >= region.x - slack && b.x + b.w <= region.x + region.w + slack;
+    });
+    if (!bands.length) return region;
+    bands.forEach(function (b) {
+      x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+      x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h);
+    });
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, lineHeight: region.smallLineHeight };
+  }
+
   // 傾きと向きを合わせて全体を読み、文字のある範囲だけを大きく写して、前処理を変えながら読み直す
   function readCard(img) {
     var full = { x: 0, y: 0, w: 1, h: 1 };
@@ -2119,11 +2487,15 @@
       // 文字の範囲が分からなかったときは写真全体を対象にする
       if (!region) region = { x: 0, y: 0, w: 1, h: 1, lineHeight: 34 };
       // 本文1行の高さが target(px) になる倍率で、文字のある範囲を写す
-      function shot(target, maxDim) {
-        return drawRegion(source, region, maxDim, firstScale * target / region.lineHeight, quarter, 0);
-      }
       function lineHeightOn(canvas) {
         return region.lineHeight * canvas.width / (region.w * whole.width);
+      }
+      // 濃い地に明るい文字の帯があれば、ここで反転しておく（このあとの白黒化・影ならしは明るい地を前提にしている）
+      function shot(target, maxDim) {
+        var canvas = drawRegion(source, region, maxDim, firstScale * target / region.lineHeight, quarter, 0);
+        var lineHeight = lineHeightOn(canvas);
+        invertDarkRegions(canvas, Math.max(8, Math.round(lineHeight / 2)), lineHeight * 4);
+        return canvas;
       }
       function keep(lines) { passes.push(lines); }
       var sharp, soft, bold;
@@ -2156,16 +2528,45 @@
       return findOrientation(source);
     }).then(function (found) {
       quarter = found.quarter;
-      return readClose(found.canvas, findTextRegion(found.lines, found.canvas.width, found.canvas.height));
+      return readClose(found.canvas, includeBands(findTextRegion(found.lines, found.canvas.width, found.canvas.height), found.bands));
     }).then(function () {
-      // メールの行は、3種類の画像それぞれで読み直す
+      // メールの行は、3種類の画像それぞれで読み直す。その画像ではメールの行を見つけられなかった場合は、
+      // ほかの画像で見つけた位置を使う（3種類とも同じ範囲を写しているので、割合で表した位置は共通）
+      var boxes = passes.map(function (lines, i) { return emailLineBox(shots[i], lines); });
+      var anyBox = boxes.filter(Boolean)[0] || null;
       var rereads = [];
       return passes.reduce(function (chain, lines, i) {
-        return chain.then(function () { return rereadEmailLine(shots[i], lines); }).then(function (email) { rereads.push(email); });
+        return chain.then(function () { return rereadEmailLine(shots[i], boxes[i] || anyBox); }).then(function (email) { rereads.push(email); });
       }, Promise.resolve()).then(function () { return rereads; });
     }).then(function (rereads) {
       return combinePasses(passes.map(function (lines) { return parseCardLines(toItems(lines)); }), rereads, quarter);
     });
+  }
+
+  // 表面と裏面の読み取り結果をまとめる。両面で読めた項目は表面を使い、裏面の違う読みは候補に回す
+  // （表面に氏名・会社名、裏面に住所・電話・メールという名刺が多い。裏面に英語表記があっても表面を優先する）
+  function mergeSides(front, back) {
+    function squeeze(v) { return String(v || '').replace(/\s+/g, ''); }
+    var result = {
+      candidates: {}, quarter: front.quarter || back.quarter, sideQuarters: { front: front.quarter, back: back.quarter }, bothSides: true,
+      lines: front.lines.concat(back.lines.filter(function (l) {
+        return !front.lines.some(function (f) { return squeeze(f) === squeeze(l); });
+      })),
+      linePasses: (front.linePasses || []).concat(back.linePasses || [])
+    };
+    OCR_FIELDS.forEach(function (f) {
+      var value = front[f] || back[f] || '';
+      var list = [];
+      function add(v) {
+        if (v && squeeze(v) !== squeeze(value) && !list.some(function (x) { return squeeze(x) === squeeze(v); })) list.push(v);
+      }
+      (front.candidates[f] || []).forEach(add);
+      add(back[f]);
+      (back.candidates[f] || []).forEach(add);
+      result[f] = value;
+      if (list.length) result.candidates[f] = list;
+    });
+    return result;
   }
 
   var ASSIGN_TARGETS = [
@@ -2275,7 +2676,8 @@
   function showOcrCandidates(parsed) {
     ocrCandidates.innerHTML = OCR_FIELDS.filter(function (f) { return parsed.candidates[f]; }).map(function (f) {
       // 自動入力した項目にも、1つの画像でだけもっと詳しく読めた結果（住所の郵便番号・建物名）があれば並べる
-      var note = parsed[f] ? 'のより詳しい読み取り結果（1つの読み方でだけ、より長く読めたもの。名刺と合えばタップ）'
+      var note = parsed[f] ? (parsed.bothSides ? 'のほかの読み取り結果（もう一方の面や、別の読み方で読めたもの。名刺と合えばタップ）'
+        : 'のより詳しい読み取り結果（1つの読み方でだけ、より長く読めたもの。名刺と合えばタップ）')
         : 'の候補（名刺と合うものをタップ。入力後に手で直せます）';
       return '<div class="ocr-line"><div class="ocr-line-text">' + OCR_LABELS[f] + note + '</div><div class="ocr-assign">' +
         parsed.candidates[f].map(function (v) { return '<button type="button" data-f="' + f + '" data-v="' + esc(v) + '">' + esc(v) + '</button>'; }).join('') +
@@ -2417,11 +2819,12 @@
   });
 
   // 上下逆や横向きで撮った写真を、読めた向きに合わせて保存用の写真も直す
-  function uprightPhoto(quarter) {
-    var source = currentPhotoDataUrl;
+  function uprightPhoto(quarter, side) {
+    side = side || activeSide;
+    var source = sidePhoto(side);
     var img = new Image();
     img.onload = function () {
-      if (currentPhotoDataUrl !== source) return;
+      if (sidePhoto(side) !== source) return;
       var canvas = document.createElement('canvas');
       canvas.width = quarter % 2 ? img.height : img.width;
       canvas.height = quarter % 2 ? img.width : img.height;
@@ -2429,10 +2832,16 @@
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.rotate(quarter * Math.PI / 2);
       ctx.drawImage(img, -img.width / 2, -img.height / 2);
-      currentPhotoDataUrl = canvas.toDataURL('image/jpeg', 0.8);
-      photoPreview.src = currentPhotoDataUrl;
+      var upright = canvas.toDataURL('image/jpeg', 0.8);
       // 直した写真を元にするので、もう一度読み取っても同じ向きになる
-      ocrSourceImage = null;
+      if (side === activeSide) {
+        currentPhotoDataUrl = upright;
+        photoPreview.src = currentPhotoDataUrl;
+        ocrSourceImage = null;
+      } else {
+        sidePhotos[side].photo = upright;
+        sidePhotos[side].ocrSource = null;
+      }
     };
     img.src = source;
   }
@@ -2442,7 +2851,9 @@
   var KEY_OCR_FIELDS = ['name', 'company', 'email'];
   function applyOcrResult(parsed) {
     ocrUsed = true;
-    if (parsed.quarter) uprightPhoto(parsed.quarter);
+    if (parsed.sideQuarters) {
+      Object.keys(parsed.sideQuarters).forEach(function (side) { if (parsed.sideQuarters[side]) uprightPhoto(parsed.sideQuarters[side], side); });
+    } else if (parsed.quarter) uprightPhoto(parsed.quarter);
     var labels = OCR_LABELS;
     var filled = [];
     var missing = [];
@@ -2484,6 +2895,7 @@
     if (optional.length) hint += ' 候補がある項目（茶色の枠）: ' + optional.join('・') + '。下の候補から選べます。';
     if (missing.length || optional.length) hint += ' 名刺に書かれていない項目は、空欄のままで保存できます。';
     if (parsed.email) hint += ' メールアドレスは1文字違いでも届かないので、名刺と見比べてください。';
+    if (parsed.bothSides) hint = '表面と裏面の両方から読み取りました。' + hint;
     if (parsed.quarter) hint += ' 写真の向きを自動で直して読み取りました。';
     if (missing.length + optional.length >= 2) hint += ' 名刺が斜めに写っている場合は「四隅を合わせて補正」を使ってから読み取り直すと、読み取りやすくなります。';
     ocrResultHint.textContent = hint;
@@ -2492,16 +2904,30 @@
 
   ocrBtn.addEventListener('click', function () {
     if (!ocrSourceImage && !currentPhotoDataUrl) return;
+    // 写真のある面をすべて読む（表面だけ・裏面だけの名刺もある）
+    var sides = ['front', 'back'].filter(function (side) { return side === activeSide ? (ocrSourceImage || currentPhotoDataUrl) : sidePhoto(side); });
     ocrBtn.disabled = true;
     var originalLabel = ocrBtn.textContent;
     ocrBtn.textContent = '読み取り中…(初回は時間がかかります)';
-    setStatus('写真から文字を読み取っています…（前処理を変えて4回読むため、30秒ほどかかることがあります）');
+    setStatus(sides.length > 1
+      ? '表面と裏面の写真から文字を読み取っています…（1枚につき前処理を変えて4回読むため、1分ほどかかることがあります）'
+      : '写真から文字を読み取っています…（前処理を変えて4回読むため、30秒ほどかかることがあります）');
 
-    loadOcrSource().then(readCard).then(applyOcrResult).catch(function (err) {
+    var results = {};
+    sides.reduce(function (chain, side) {
+      return chain.then(function () {
+        ocrSidePrefix = sides.length > 1 ? SIDE_LABELS[side] + ' ' : '';
+        return loadOcrSource(side).then(readCard).then(function (parsed) { results[side] = parsed; });
+      });
+    }, Promise.resolve()).then(function () {
+      // 1枚だけなら、それはいま選んでいる面の写真
+      return sides.length > 1 ? mergeSides(results.front, results.back) : results[sides[0]];
+    }).then(applyOcrResult).catch(function (err) {
       console.error(err);
       alert('文字の読み取りに失敗しました。インターネット接続と写真の写りを確認するか、手入力してください。（写真はそのまま保存できます）');
       countStatus();
     }).finally(function () {
+      ocrSidePrefix = '';
       ocrBtn.disabled = false;
       ocrBtn.textContent = originalLabel;
     });
@@ -2529,6 +2955,8 @@
     currentPhotoDataUrl = '';
     originalPhotoDataUrl = '';
     ocrSourceImage = null;
+    activeSide = 'front';
+    sidePhotos = { front: emptySide(), back: emptySide() };
     hidePhotoPreview();
     formTitle.textContent = '新しい名刺を追加';
     saveBtn.textContent = '保存する';
@@ -2543,7 +2971,11 @@
     currentPhotoDataUrl = card.photo || '';
     originalPhotoDataUrl = card.photoOriginal || '';
     ocrSourceImage = null;
+    activeSide = 'front';
+    sidePhotos = { front: emptySide(), back: { photo: card.photoBack || '', original: card.photoBackOriginal || '', ocrSource: null } };
     if (currentPhotoDataUrl) showPhotoPreview(currentPhotoDataUrl); else hidePhotoPreview();
+    // 裏面の写真しかない名刺は、裏面を開いておく
+    if (!currentPhotoDataUrl && sidePhotos.back.photo) switchSide('back');
     formTitle.textContent = '名刺を編集';
     saveBtn.textContent = '更新する';
     cancelEditBtn.style.display = 'inline-flex';
@@ -2581,7 +3013,8 @@
       if (c.metDate) rows += '<div class="card-row"><span class="k">交換日</span><span>' + esc(c.metDate) + '</span></div>';
       if (c.eventName) rows += '<div class="card-row"><span class="k">交流会</span><span>' + esc(c.eventName) + '</span></div>';
       var memo = c.memo ? '<div class="card-memo">' + esc(c.memo) + '</div>' : '';
-      var thumb = c.photo ? '<img class="card-thumb" src="' + esc(c.photo) + '" alt="' + esc(c.name || '名刺') + 'の写真">' : '';
+      var thumb = (c.photo ? '<img class="card-thumb" src="' + esc(c.photo) + '" alt="' + esc(c.name || '名刺') + 'の写真">' : '') +
+        (c.photoBack ? '<img class="card-thumb" src="' + esc(c.photoBack) + '" alt="' + esc(c.name || '名刺') + 'の写真（裏面）">' : '');
       var badge = c.mailOpenedAt
         ? '<span class="badge done">お礼メール下書き済み ' + esc(formatStamp(c.mailOpenedAt)) + '</span>'
         : (c.mailBody ? '<span class="badge">お礼メール文面を保存済み（未作成）</span>' : '');
@@ -2595,6 +3028,7 @@
         rows + memo + badge +
         '<div class="card-actions">' +
         (c.photoOriginal ? '<button class="btn-small orig-btn">元の写真</button>' : '') +
+        (c.photoBackOriginal ? '<button class="btn-small orig-back-btn">裏面の元の写真</button>' : '') +
         '<button class="btn-small mail-btn">お礼メールを作成</button>' +
         '<button class="btn-small edit-btn">編集</button>' +
         '<button class="btn-small btn-danger delete-btn">削除</button>' +
@@ -2608,8 +3042,8 @@
     var id = cardEl.getAttribute('data-id');
     var card = cards.find(function (c) { return c.id === id; });
     if (!card) return;
-    if (e.target.classList.contains('orig-btn')) {
-      lightboxImg.src = card.photoOriginal;
+    if (e.target.classList.contains('orig-btn') || e.target.classList.contains('orig-back-btn')) {
+      lightboxImg.src = e.target.classList.contains('orig-btn') ? card.photoOriginal : card.photoBackOriginal;
       lightbox.classList.add('show');
     } else if (e.target.classList.contains('mail-btn')) {
       openMailModal(card);
@@ -2672,7 +3106,7 @@
   // 自動読み取りを使った名刺は、保存の前に重要な項目をもう一度見てもらう
   saveBtn.addEventListener('click', function () {
     var v = getFormValues();
-    if (!v.name && !v.company && !currentPhotoDataUrl) {
+    if (!v.name && !v.company && !sidePhoto('front') && !sidePhoto('back')) {
       alert('氏名・会社名・写真のいずれかは入力してください。');
       return;
     }
@@ -2698,13 +3132,20 @@
 
   function doSave() {
     var v = getFormValues();
-    v.photo = currentPhotoDataUrl;
-    v.photoOriginal = (originalPhotoDataUrl && originalPhotoDataUrl !== currentPhotoDataUrl) ? originalPhotoDataUrl : '';
+    stashSide();
+    var front = sidePhotos.front, back = sidePhotos.back;
+    v.photo = front.photo;
+    v.photoOriginal = (front.original && front.original !== front.photo) ? front.original : '';
     var now = Date.now();
     var card;
     var next;
     var message;
     var existing = editingId ? cards.find(function (c) { return c.id === editingId; }) : null;
+    // 裏面の項目は、裏面の写真があるとき（と、裏面を消すとき）だけ持たせる。片面だけの名刺のデータは従来と同じ形
+    if (back.photo || (existing && existing.photoBack)) {
+      v.photoBack = back.photo;
+      v.photoBackOriginal = (back.original && back.original !== back.photo) ? back.original : '';
+    }
     if (existing) {
       card = Object.assign({}, existing, v, { updatedAt: now });
       next = cards.map(function (c) { return c.id === card.id ? card : c; });
@@ -2815,7 +3256,7 @@
         if (!confirm(count + ' 件の名刺データを読み込みます。現在のデータに追加されます。よろしいですか？')) return;
         var now = Date.now();
         var added = data.map(function (item) {
-          return {
+          var card = {
             id: newId(),
             name: item.name || '',
             company: item.company || '',
@@ -2837,6 +3278,12 @@
             createdAt: item.createdAt || now,
             updatedAt: now
           };
+          // 裏面の写真は、ある名刺だけ持たせる（片面だけの名刺は従来と同じ形）
+          if (item.photoBack) {
+            card.photoBack = item.photoBack;
+            card.photoBackOriginal = item.photoBackOriginal || '';
+          }
+          return card;
         });
         var next = cards.concat(added);
         commit(next, added, []).then(function () {
@@ -2856,7 +3303,8 @@
   window.meishiDebug = {
     parseCardText: parseCardText, parseCardLines: parseCardLines, warpQuad: warpQuad,
     combinePasses: combinePasses, decideField: decideField, organizeLines: organizeLines, isLineUsed: isLineUsed, pickCompany: pickCompany,
-    readEmail: readEmail, refineForField: refineForField, findGraphics: findGraphics
+    readEmail: readEmail, refineForField: refineForField, findGraphics: findGraphics, invertDarkRegions: invertDarkRegions,
+    mergeSides: mergeSides
   };
 
   // ---- AI社員ダッシュボードへ送る（電話・携帯・メール・住所・写真は含めない） ----

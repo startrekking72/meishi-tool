@@ -651,7 +651,60 @@ const CASES = [
       const saved = JSON.parse(env.store[STORAGE_KEY] || '[]');
       return { 件数: saved.length, 部署: saved[0] && saved[0].department, 役職: saved[0] && saved[0].title, 警告: env.alerts };
     },
-    expect: { 件数: 1, 部署: 'AIプレゼンター', 役職: '', 警告: [] } }
+    expect: { 件数: 1, 部署: 'AIプレゼンター', 役職: '', 警告: [] } },
+
+  // ---- 9. 表面・裏面の2枚 ----
+  { group: '9 表裏の2枚', name: '表面に氏名・会社名、裏面に住所・電話・メール → 両方の項目がそろう。裏面の英語の氏名は候補に回る', type: 'improve',
+    run: function (env) {
+      function parsed(values, lines, quarter) {
+        return Object.assign({ name: '', company: '', department: '', title: '', phone: '', mobile: '', email: '', address: '', candidates: {}, quarter: quarter || 0, lines: lines, linePasses: [lines] }, values);
+      }
+      const front = parsed({ name: '山田 太郎', company: '株式会社サンプル商事', title: '部長' }, ['株式会社サンプル商事', '部長', '山田 太郎']);
+      const back = parsed({ name: 'Taro Yamada', address: '〒100-0001 東京都千代田区千代田1-2-3', phone: '03-1234-5678', email: 'yamada@sample.co.jp' },
+        ['Taro Yamada', '〒100-0001 東京都千代田区千代田1-2-3', 'TEL 03-1234-5678', 'yamada@sample.co.jp', '部長'], 2);
+      const r = plain(env.ev('mergeSides')(front, back));
+      return { name: r.name, company: r.company, title: r.title, address: r.address, phone: r.phone, email: r.email, 候補: r.candidates,
+        行: r.lines, 向き: r.sideQuarters, 両面: r.bothSides };
+    },
+    expect: { name: '山田 太郎', company: '株式会社サンプル商事', title: '部長', address: '〒100-0001 東京都千代田区千代田1-2-3', phone: '03-1234-5678', email: 'yamada@sample.co.jp',
+      候補: { name: ['Taro Yamada'] },
+      行: ['株式会社サンプル商事', '部長', '山田 太郎', 'Taro Yamada', '〒100-0001 東京都千代田区千代田1-2-3', 'TEL 03-1234-5678', 'yamada@sample.co.jp'],
+      向き: { front: 0, back: 2 }, 両面: true } },
+  { group: '9 表裏の2枚', name: '表面と裏面の写真を保存 → 両方残り、編集で開くと裏面に切り替えて見られる。一覧には2枚並ぶ', type: 'improve',
+    run: async function (env) {
+      await tick();
+      env.el('f_name').value = '山田 太郎';
+      env.ev("currentPhotoDataUrl = 'data:image/jpeg;base64,FRONT'");
+      env.ev('switchSide')('back');
+      const 裏面の写真は空 = env.ev('currentPhotoDataUrl') === '';
+      env.ev("currentPhotoDataUrl = 'data:image/jpeg;base64,BACK'");
+      env.fire('saveBtn', 'click');
+      await tick();
+      const saved = JSON.parse(env.store[STORAGE_KEY] || '[]')[0] || {};
+      const 一覧の写真 = (env.el('cardList').innerHTML.match(/class="card-thumb"/g) || []).length;
+      env.ev('fillForm')(env.ev('cards')[0]);
+      const 編集で開いた面 = env.ev('activeSide') + ':' + env.ev('currentPhotoDataUrl');
+      env.ev('switchSide')('back');
+      return { 表面: saved.photo, 裏面: saved.photoBack, 裏面の写真は空, 一覧の写真, 編集で開いた面, 裏面に切り替え: env.ev('currentPhotoDataUrl'), 警告: env.alerts };
+    },
+    expect: { 表面: 'data:image/jpeg;base64,FRONT', 裏面: 'data:image/jpeg;base64,BACK', 裏面の写真は空: true, 一覧の写真: 2,
+      編集で開いた面: 'front:data:image/jpeg;base64,FRONT', 裏面に切り替え: 'data:image/jpeg;base64,BACK', 警告: [] } },
+  { group: '9 表裏の2枚', name: '裏面の写真だけでも保存でき、裏面の写真のある名刺はJSON読み込みでも裏面が残る', type: 'improve',
+    run: async function (env) {
+      await tick();
+      env.ev('switchSide')('back');
+      env.ev("currentPhotoDataUrl = 'data:image/jpeg;base64,ONLYBACK'");
+      env.fire('saveBtn', 'click');
+      await tick();
+      const saved = JSON.parse(env.store[STORAGE_KEY] || '[]');
+      const input = env.el('importInput');
+      input.files = [{ _text: JSON.stringify([{ name: '両面 花子', photo: 'data:image/jpeg;base64,F', photoBack: 'data:image/jpeg;base64,B' }]) }];
+      env.fire('importInput', 'change');
+      await tick(); await tick();
+      const all = JSON.parse(env.store[STORAGE_KEY] || '[]');
+      return { 裏面だけ: { 件数: saved.length, 表面: saved[0] && saved[0].photo, 裏面: saved[0] && saved[0].photoBack }, 読み込み後の裏面: all[1] && all[1].photoBack, 警告: env.alerts };
+    },
+    expect: { 裏面だけ: { 件数: 1, 表面: '', 裏面: 'data:image/jpeg;base64,ONLYBACK' }, 読み込み後の裏面: 'data:image/jpeg;base64,B', 警告: [] } }
 ];
 
 // ---- 図柄を消す処理のための、白黒の絵（1＝黒）。index.html の findGraphics が受け取る canvas の代わり ----
