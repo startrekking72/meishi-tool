@@ -77,7 +77,7 @@
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field.full { grid-column: 1 / -1; }
   label { font-size: 12px; color: var(--sub); }
-  input[type=text], input[type=tel], input[type=email], input[type=date], textarea {
+  input[type=text], input[type=tel], input[type=email], input[type=url], input[type=date], textarea {
     width: 100%;
     padding: 10px 12px;
     border: 1px solid var(--border);
@@ -410,6 +410,10 @@
         <label>建物名・階・部屋番号</label>
         <input type="text" id="f_building" placeholder="〇〇ビル 5F">
       </div>
+      <div class="field full">
+        <label>Webサイト・QRコードのURL</label>
+        <input type="url" id="f_url" placeholder="https://example.com">
+      </div>
       <div class="field">
         <label>名刺交換日</label>
         <input type="date" id="f_metDate">
@@ -428,7 +432,7 @@
       <button class="btn-primary btn-big" id="saveBtn">保存する</button>
       <button id="cancelEditBtn" style="display:none;">編集をキャンセル</button>
     </div>
-    <div class="hint">氏名・会社名・写真のどれか1つがあれば保存できます。部署・役職・電話番号・メールアドレス・住所・建物名・交流会名・会話メモは、名刺に書かれていなければ空欄のままで構いません。</div>
+    <div class="hint">氏名・会社名・写真のどれか1つがあれば保存できます。部署・役職・電話番号・メールアドレス・住所・建物名・URL・交流会名・会話メモは、名刺に書かれていなければ空欄のままで構いません。</div>
   </section>
 
   <div class="toolbar">
@@ -467,7 +471,7 @@
       <button id="resetTemplateBtn">初期のひな形に戻す</button>
     </div>
     <div class="hint">
-      使える差し込み文字：{name}氏名 {company}会社名 {department}部署 {title}役職 {phone}電話番号 {mobile}携帯電話番号 {email}メール {address}住所（建物名まで） {building}建物名 {metDate}交換日 {metDateJp}交換日（〇月〇日） {eventName}交流会名 {memo}会話メモ {myName}自分の名前 {sender}署名<br>
+      使える差し込み文字：{name}氏名 {company}会社名 {department}部署 {title}役職 {phone}電話番号 {mobile}携帯電話番号 {email}メール {address}住所（建物名まで） {building}建物名 {url}URL {metDate}交換日 {metDateJp}交換日（〇月〇日） {eventName}交流会名 {memo}会話メモ {myName}自分の名前 {sender}署名<br>
       {salutation}＝「氏名 様」（氏名が空なら「ご担当者様」）　{occasion}＝交換日と交流会名から作る書き出し（例：「10月9日の「〇〇交流会」では、」。どちらも空なら「先日は、」）<br>
       [[ ]] で囲んだ部分は、中の差し込み文字が空欄のとき丸ごと省略されます（例：[[{company}の皆様]]）。
     </div>
@@ -667,7 +671,7 @@
   var mailCloseBtn = document.getElementById('mailCloseBtn');
   var currentMailCard = null;
 
-  var fields = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address', 'building', 'metDate', 'eventName', 'memo'];
+  var fields = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address', 'building', 'url', 'metDate', 'eventName', 'memo'];
   var currentPhotoDataUrl = '';
   var ocrSourceImage = null;
   // 補正・回転する前の写真。補正後の写真（currentPhotoDataUrl）とは別に残す
@@ -861,7 +865,7 @@
     return card[key] || '';
   }
 
-  var TOKEN_RE = /\{(name|company|department|title|phone|mobile|email|address|building|metDate|metDateJp|eventName|memo|myName|sender|salutation|occasion)\}/g;
+  var TOKEN_RE = /\{(name|company|department|title|phone|mobile|email|address|building|url|metDate|metDateJp|eventName|memo|myName|sender|salutation|occasion)\}/g;
 
   function fillTemplate(str, card) {
     // [[ ]] の中の差し込み文字がひとつでも空なら、その部分を丸ごと省く
@@ -1980,6 +1984,155 @@
     });
   }
 
+  // ---- QRコード（名刺に印刷された連絡先・URL）。中身は読み違いがないので、読めた項目は文字の読み取りより優先する ----
+  var JSQR_URL = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+  var jsQrLoading = null;
+  function loadJsQr() {
+    if (typeof jsQR !== 'undefined') return Promise.resolve();
+    if (jsQrLoading) return jsQrLoading;
+    jsQrLoading = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = JSQR_URL;
+      s.onload = function () { resolve(); };
+      s.onerror = function () { jsQrLoading = null; s.remove(); reject(new Error('QRコードの読み取り部品を読み込めません')); };
+      document.head.appendChild(s);
+    });
+    return jsQrLoading;
+  }
+
+  // 写真の中のQRコードを探し、読めた中身を返す（見つからなければ空の配列）。
+  // 写真全体を大きさを変えて試し、それでも見つからなければ、小さく写ったQRコード向けに4分割して拡大して試す
+  function readQrCodes(img) {
+    return loadJsQr().then(function () {
+      var full = { x: 0, y: 0, w: 1, h: 1 };
+      var tries = [[full, 1200], [full, 2000], [full, 800]];
+      [[0, 0], [0.45, 0], [0, 0.45], [0.45, 0.45]].forEach(function (p) { tries.push([{ x: p[0], y: p[1], w: 0.55, h: 0.55 }, 1600]); });
+      for (var i = 0; i < tries.length; i++) {
+        var canvas = drawRegion(img, tries[i][0], tries[i][1]);
+        var data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+        var code = jsQR(data.data, canvas.width, canvas.height, { inversionAttempts: 'attemptBoth' });
+        if (code && code.data) return [code.data];
+      }
+      return [];
+    }).catch(function (err) {
+      // QRコードが読めなくても、文字の読み取りはそのまま続ける
+      console.warn(err);
+      return [];
+    });
+  }
+
+  function isMobileNumber(num) {
+    return /^0[789]0/.test(String(num || '').replace(/^\+81[-\s]?/, '0').replace(/\D/g, ''));
+  }
+
+  // 連絡先のQRコード（vCard 形式）を項目ごとの値にする
+  function parseVcardText(text) {
+    var out = {};
+    var lines = [];
+    text.split(/\r?\n/).forEach(function (l) { if (/^[ \t]/.test(l) && lines.length) lines[lines.length - 1] += l.slice(1); else lines.push(l); });
+    function unescape(v) { return v.replace(/\\n/gi, ' ').replace(/\\([,;\\])/g, '$1').trim(); }
+    // 「;」で区切られた値（\; は区切りではない）
+    function parts(v) { return v.replace(/\\;/g, '\u0000').split(';').map(function (p) { return unescape(p.replace(/\u0000/g, '\\;')); }); }
+    var familyGiven = '';
+    lines.forEach(function (l) {
+      var m = /^(?:[\w-]+\.)?([A-Za-z-]+)((?:;[^:]*)?):([\s\S]*)$/.exec(l);
+      if (!m) return;
+      var key = m[1].toUpperCase(), params = m[2].toUpperCase(), value = m[3];
+      if (key === 'FN') out.name = unescape(value);
+      else if (key === 'N') familyGiven = parts(value).slice(0, 2).filter(Boolean).join(' ');
+      else if (key === 'ORG') {
+        var org = parts(value);
+        out.company = org[0];
+        if (org.slice(1).filter(Boolean).length) out.department = org.slice(1).filter(Boolean).join(' ');
+      } else if (key === 'TITLE') out.title = unescape(value);
+      else if (key === 'TEL') {
+        var num = unescape(value).replace(/^tel:/i, '');
+        if (/CELL/.test(params) || isMobileNumber(num)) out.mobile = out.mobile || num;
+        else if (!/FAX/.test(params)) out.phone = out.phone || num;
+      } else if (key === 'EMAIL') out.email = out.email || unescape(value);
+      else if (key === 'ADR') {
+        // 私書箱;建物など;番地;市区町村;都道府県;郵便番号;国 の順。日本の書き方（〒 都道府県 市区町村 番地 建物）に並べ直す
+        var a = parts(value);
+        var postal = (a[5] || '').replace(/^(\d{3})(\d{4})$/, '$1-$2');
+        var body = (a[4] || '') + (a[3] || '') + (a[2] || '');
+        if (body) out.address = ((postal ? '〒' + postal + ' ' : '') + body + (a[1] ? ' ' + a[1] : '')).trim();
+      } else if (key === 'URL') out.url = out.url || unescape(value);
+    });
+    if (!out.name && familyGiven) out.name = familyGiven;
+    return out;
+  }
+
+  // 連絡先のQRコード（MECARD 形式。「MECARD:N:山田,太郎;TEL:…;;」）を項目ごとの値にする
+  function parseMecard(text) {
+    var out = {};
+    text.replace(/^MECARD:/i, '').replace(/\\;/g, '\u0000').split(';').forEach(function (field) {
+      var m = /^([A-Za-z-]+):([\s\S]*)$/.exec(field);
+      if (!m) return;
+      var key = m[1].toUpperCase();
+      var raw = m[2].replace(/\u0000/g, ';');
+      var v = raw.replace(/\\([,:\\])/g, '$1').trim();
+      if (!v) return;
+      // 氏名は「姓,名」の形
+      if (key === 'N') out.name = raw.split(',').map(function (s) { return s.replace(/\\/g, '').trim(); }).filter(Boolean).join(' ');
+      else if (key === 'TEL') { if (isMobileNumber(v)) out.mobile = out.mobile || v; else out.phone = out.phone || v; }
+      else if (key === 'EMAIL') out.email = out.email || v;
+      else if (key === 'ADR') out.address = v;
+      else if (key === 'URL') out.url = out.url || v;
+      else if (key === 'ORG') out.company = v;
+    });
+    return out;
+  }
+
+  var URL_IN_TEXT_RE = /(https?:\/\/[^\s"'<>]+|www\.[^\s"'<>]+)/i;
+  function normalizeUrl(url) { return /^www\./i.test(url) ? 'https://' + url : url; }
+
+  // QRコードの中身を項目ごとの値にする。連絡先（vCard・MECARD）、メール・電話のリンク、URL に対応し、それ以外は {} を返す
+  function parseQrText(text) {
+    var t = String(text || '').trim();
+    var m;
+    if (/^BEGIN:VCARD/i.test(t)) return parseVcardText(t);
+    if (/^MECARD:/i.test(t)) return parseMecard(t);
+    if ((m = /^mailto:([^?]+)/i.exec(t))) return { email: decodeURIComponent(m[1]) };
+    if ((m = /^tel:(.+)$/i.exec(t))) return isMobileNumber(m[1]) ? { mobile: m[1].trim() } : { phone: m[1].trim() };
+    if ((m = URL_IN_TEXT_RE.exec(t))) return { url: normalizeUrl(m[1]) };
+    return {};
+  }
+
+  // 読み取り結果に、QRコードの中身を重ねる。QRコードの値を入れ、文字で読んだ違う値は候補に残す。
+  // QRコードにURLがなければ、名刺に印刷されたURLを文字の読み取り結果から探す（こちらは読み違いがありうる）
+  function addQrToParsed(parsed, codes) {
+    function squeeze(v) { return String(v || '').replace(/\s+/g, ''); }
+    var fields = {}, others = [];
+    codes.forEach(function (code) {
+      var got = parseQrText(code);
+      var keys = Object.keys(got).filter(function (k) { return got[k]; });
+      if (!keys.length) others.push(code);
+      keys.forEach(function (k) { if (!fields[k]) fields[k] = got[k]; });
+    });
+    parsed.qr = { fields: fields, others: others, count: codes.length };
+    OCR_FIELDS.forEach(function (f) {
+      var v = fields[f];
+      if (!v) return;
+      var list = (parsed.candidates[f] || []).slice();
+      if (parsed[f]) list.unshift(parsed[f]);
+      list = list.filter(function (x, i) { return squeeze(x) !== squeeze(v) && list.indexOf(x) === i; });
+      parsed[f] = v;
+      if (list.length) parsed.candidates[f] = list; else delete parsed.candidates[f];
+    });
+    parsed.url = fields.url || '';
+    parsed.urlFromText = false;
+    if (!parsed.url) {
+      (parsed.lines || []).some(function (line) {
+        var m = URL_IN_TEXT_RE.exec(String(line).replace(/\s+/g, ''));
+        if (m) { parsed.url = normalizeUrl(m[1].replace(/[.,、。]+$/, '')); parsed.urlFromText = true; }
+        return !!m;
+      });
+    }
+    // どの項目にも当たらないQRコードの中身は、行の一覧に出してメモなどに入れられるようにする
+    if (others.length) parsed.lines = others.concat(parsed.lines || []);
+    return parsed;
+  }
+
   // 向きが合っているほど日本語やメールアドレスがはっきり読めるので、その量を点数にする
   function orientationScore(lines) {
     var score = 0;
@@ -2468,7 +2621,7 @@
     });
   }
 
-  var USED_FIELDS = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address', 'building'];
+  var USED_FIELDS = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address', 'building', 'url'];
   var USED_LABEL_RE = /(tel|phone|mobile|cell|e-?mail|mail|電話|携帯|〒)/g;
 
   // 行の中身が、すでに入力欄に入っている内容だけでできているか（見出しの「TEL」などは除いて考える）
@@ -2607,7 +2760,7 @@
 
   var ASSIGN_TARGETS = [
     ['name', '氏名'], ['company', '会社名'], ['department', '部署'], ['title', '役職'],
-    ['phone', '電話'], ['mobile', '携帯'], ['email', 'メール'], ['address', '住所'], ['building', '建物名'], ['memo', 'メモに追記']
+    ['phone', '電話'], ['mobile', '携帯'], ['email', 'メール'], ['address', '住所'], ['building', '建物名'], ['url', 'URL'], ['memo', 'メモに追記']
   ];
 
   // lines は読み取った行（重なりを除いたもの）、passes は読み取りごとの行。どちらも元のまま持っておき、表示のときだけ整理する
@@ -2664,6 +2817,7 @@
     } else if (f === 'address') value = extractAddress([text]);
     else if (f === 'company') value = trimJunk(COMPANY_RE.test(tidy) ? pickCompany(tidy) : tidy);
     else if (f === 'name' || f === 'department' || f === 'title' || f === 'building') value = trimJunk(text);
+    else if (f === 'url') { var um = URL_IN_TEXT_RE.exec(text.replace(/\s+/g, '')); value = um ? normalizeUrl(um[1]) : ''; }
     return value || line;
   }
 
@@ -2930,7 +3084,8 @@
         if (f !== 'address') input.value = parsed[f];
         input.classList.add('ocr-filled');
         // 一致して読めた場合でも同じ読み違いが重なることがあるので、メールは必ず見比べてもらう
-        if (f === 'email') input.classList.add('needs-check');
+        // （QRコードから読んだメールは読み違いがないので除く）
+        if (f === 'email' && !(parsed.qr && parsed.qr.fields.email)) input.classList.add('needs-check');
         filled.push(labels[f]);
         if (building) filled.push('建物名');
       } else if (parsed.candidates[f] && replaceable) {
@@ -2948,6 +3103,17 @@
       }
     });
 
+    // URL は QRコードか、名刺に印刷された文字から。手で入力・修正した URL は触らない
+    var urlInput = document.getElementById('f_url');
+    urlInput.classList.remove('needs-check');
+    if (parsed.url && (!urlInput.value || urlInput.classList.contains('ocr-filled'))) {
+      urlInput.value = parsed.url;
+      urlInput.classList.add('ocr-filled');
+      // 文字から読んだ URL は1文字違いでも開けないので、名刺と見比べてもらう
+      if (parsed.urlFromText) urlInput.classList.add('needs-check');
+      filled.push('URL');
+    }
+
     showOcrLines(parsed.lines, parsed.linePasses);
     showOcrCandidates(parsed);
     ocrResultWrap.style.display = 'block';
@@ -2958,7 +3124,13 @@
     if (missing.length) hint += ' 確認が必要な項目（赤枠）: ' + missing.join('・') + '。下の候補を選ぶか、手入力してください。';
     if (optional.length) hint += ' 候補がある項目（茶色の枠）: ' + optional.join('・') + '。下の候補から選べます。';
     if (missing.length || optional.length) hint += ' 名刺に書かれていない項目は、空欄のままで保存できます。';
-    if (parsed.email) hint += ' メールアドレスは1文字違いでも届かないので、名刺と見比べてください。';
+    if (parsed.email && !(parsed.qr && parsed.qr.fields.email)) hint += ' メールアドレスは1文字違いでも届かないので、名刺と見比べてください。';
+    if (parsed.urlFromText && filled.indexOf('URL') !== -1) hint += ' URLは名刺の文字から読んだので、名刺と見比べてください。';
+    if (parsed.qr && parsed.qr.count) {
+      var qrLabels = Object.keys(parsed.qr.fields).map(function (f) { return f === 'url' ? 'URL' : labels[f]; }).filter(Boolean);
+      hint = 'QRコードを読み取りました' + (qrLabels.length ? '（' + qrLabels.join('・') + '。QRコードの内容を優先して入れています）' : '') + '。' +
+        (parsed.qr.others.length ? 'どの項目にも当たらないQRコードの中身は、下の「読み取った行」から会話メモなどに入れられます。' : '') + hint;
+    }
     if (parsed.bothSides) hint = '表面と裏面の両方から読み取りました。' + hint;
     if (parsed.quarter) hint += ' 写真の向きを自動で直して読み取りました。';
     if (missing.length + optional.length >= 2) hint += ' 名刺が斜めに写っている場合は「四隅を合わせて補正」を使ってから読み取り直すと、読み取りやすくなります。';
@@ -2978,14 +3150,22 @@
       : '写真から文字を読み取っています…（前処理を変えて4回読むため、30秒ほどかかることがあります）');
 
     var results = {};
+    var qrCodes = [];
     sides.reduce(function (chain, side) {
       return chain.then(function () {
         ocrSidePrefix = sides.length > 1 ? SIDE_LABELS[side] + ' ' : '';
-        return loadOcrSource(side).then(readCard).then(function (parsed) { results[side] = parsed; });
+        return loadOcrSource(side).then(function (img) {
+          // 先にQRコードを探す（すぐ終わる）。そのあと文字を読む
+          ocrBtn.textContent = '読み取り中… ' + ocrSidePrefix + 'QRコード';
+          return readQrCodes(img).then(function (codes) {
+            codes.forEach(function (c) { if (qrCodes.indexOf(c) === -1) qrCodes.push(c); });
+            return readCard(img);
+          });
+        }).then(function (parsed) { results[side] = parsed; });
       });
     }, Promise.resolve()).then(function () {
       // 1枚だけなら、それはいま選んでいる面の写真
-      return sides.length > 1 ? mergeSides(results.front, results.back) : results[sides[0]];
+      return addQrToParsed(sides.length > 1 ? mergeSides(results.front, results.back) : results[sides[0]], qrCodes);
     }).then(applyOcrResult).catch(function (err) {
       console.error(err);
       alert('文字の読み取りに失敗しました。インターネット接続と写真の写りを確認するか、手入力してください。（写真はそのまま保存できます）');
@@ -3074,6 +3254,9 @@
       if (c.mobile) rows += '<div class="card-row"><span class="k">携帯</span><span>' + esc(c.mobile) + '</span></div>';
       if (c.email) rows += '<div class="card-row"><span class="k">メール</span><span>' + esc(c.email) + '</span></div>';
       if (c.address || c.building) rows += '<div class="card-row"><span class="k">住所</span><span>' + esc(fullAddress(c)) + '</span></div>';
+      // URL は http(s) のものだけリンクにする
+      if (c.url) rows += '<div class="card-row"><span class="k">URL</span><span>' + (/^https?:\/\//i.test(c.url)
+        ? '<a href="' + esc(c.url) + '" target="_blank" rel="noopener noreferrer">' + esc(c.url) + '</a>' : esc(c.url)) + '</span></div>';
       if (c.metDate) rows += '<div class="card-row"><span class="k">交換日</span><span>' + esc(c.metDate) + '</span></div>';
       if (c.eventName) rows += '<div class="card-row"><span class="k">交流会</span><span>' + esc(c.eventName) + '</span></div>';
       var memo = c.memo ? '<div class="card-memo">' + esc(c.memo) + '</div>' : '';
@@ -3177,7 +3360,7 @@
     var emailOk = !v.email || EMAIL_FORMAT_RE.test(v.email);
     if (!ocrUsed && emailOk) { doSave(); return; }
     // 3番目が true の項目（氏名・会社名）だけ、空欄を赤で知らせる。ほかは名刺に書かれていないことがあるので、空欄と分かる表示にとどめる
-    var rows = [['氏名', v.name, true], ['会社名', v.company, true], ['部署', v.department], ['役職', v.title], ['固定電話', v.phone], ['携帯電話', v.mobile], ['メール', v.email], ['住所', v.address], ['建物名', v.building]];
+    var rows = [['氏名', v.name, true], ['会社名', v.company, true], ['部署', v.department], ['役職', v.title], ['固定電話', v.phone], ['携帯電話', v.mobile], ['メール', v.email], ['住所', v.address], ['建物名', v.building], ['URL', v.url]];
     var html = rows.map(function (r) {
       var empty = r[2] ? '<span style="color:var(--danger);">（未入力）</span>' : '<span style="color:var(--sub);">（空欄のまま保存します）</span>';
       return '<div class="card-row"><span class="k">' + r[0] + '</span><span>' + (r[1] ? esc(r[1]) : empty) + '</span></div>';
@@ -3208,6 +3391,7 @@
     // 裏面の項目は、裏面の写真があるとき（と、裏面を消すとき）だけ持たせる。片面だけの名刺のデータは従来と同じ形
     // 建物名も、入力したとき（と、消すとき）だけ持たせる
     if (!v.building && !(existing && existing.building)) delete v.building;
+    if (!v.url && !(existing && existing.url)) delete v.url;
     if (back.photo || (existing && existing.photoBack)) {
       v.photoBack = back.photo;
       v.photoBackOriginal = (back.original && back.original !== back.photo) ? back.original : '';
@@ -3297,7 +3481,7 @@
   exportCsvBtn.addEventListener('click', function () {
     var columns = [
       ['氏名', 'name'], ['会社名', 'company'], ['部署', 'department'], ['役職', 'title'],
-      ['電話番号', 'phone'], ['携帯電話番号', 'mobile'], ['メールアドレス', 'email'], ['住所', 'address'], ['建物名', 'building'],
+      ['電話番号', 'phone'], ['携帯電話番号', 'mobile'], ['メールアドレス', 'email'], ['住所', 'address'], ['建物名', 'building'], ['URL', 'url'],
       ['名刺交換日', 'metDate'], ['交流会名', 'eventName'], ['会話メモ', 'memo']
     ];
     var header = columns.map(function (c) { return csvCell(c[0]); }).concat([csvCell('お礼メール下書き日時'), csvCell('登録日時'), csvCell('更新日時')]);
@@ -3345,6 +3529,7 @@
             updatedAt: now
           };
           if (item.building) card.building = item.building;
+          if (item.url) card.url = item.url;
           // 裏面の写真は、ある名刺だけ持たせる（片面だけの名刺は従来と同じ形）
           if (item.photoBack) {
             card.photoBack = item.photoBack;

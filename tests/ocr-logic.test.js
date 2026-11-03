@@ -344,9 +344,9 @@ const CASES = [
       return { 保存後の件数: env.ev('cards').length, 保存領域: scrub(JSON.stringify(JSON.parse(env.store[STORAGE_KEY]), null, 1)), 警告: env.alerts };
     },
     stored: true },
-  // 建物名の列は新しく足したもの。旧データの名刺では空なので、その列を除いて従来と同じかを比べる
-  { group: '既存機能', name: 'CSV書き出しの内容（足した「建物名」の列を除く）', type: 'keep',
-    run: async function (env) { await tick(); env.fire('exportCsvBtn', 'click'); return scrub(env.blobs.map(function (b) { return b.type + '\n' + dropCsvColumn(b.text, '建物名'); }).join('\n')); },
+  // 建物名・URLの列は新しく足したもの。旧データの名刺では空なので、その列を除いて従来と同じかを比べる
+  { group: '既存機能', name: 'CSV書き出しの内容（足した「建物名」「URL」の列を除く）', type: 'keep',
+    run: async function (env) { await tick(); env.fire('exportCsvBtn', 'click'); return scrub(env.blobs.map(function (b) { return b.type + '\n' + dropCsvColumn(dropCsvColumn(b.text, '建物名'), 'URL'); }).join('\n')); },
     stored: true },
   { group: '既存機能', name: 'JSON書き出しの内容', type: 'keep',
     run: async function (env) { await tick(); env.fire('exportBtn', 'click'); return env.blobs.map(function (b) { return b.type + '\n' + b.text; }).join('\n'); },
@@ -408,7 +408,7 @@ const CASES = [
       env.fire('saveBtn', 'click');
       return confirmRows(env);
     },
-    expect: { 赤い未入力: [], 空欄の表示: ['部署', '役職', '固定電話', '携帯電話', 'メール', '住所', '建物名'] } },
+    expect: { 赤い未入力: [], 空欄の表示: ['部署', '役職', '固定電話', '携帯電話', 'メール', '住所', '建物名', 'URL'] } },
   { group: '6 任意項目の空欄', name: '確認画面：氏名・会社名が空欄のときは、従来どおり赤で知らせる（保存はできる）', type: 'improve',
     run: async function (env) {
       await tick();
@@ -780,7 +780,74 @@ const CASES = [
       const head = lines[0].split(/,(?=")/), row = lines[1].split(/,(?=")/);
       return { 読み込み: (JSON.parse(env.store[STORAGE_KEY] || '[]')[0] || {}).building, CSV: row[head.indexOf('"建物名"')] };
     },
-    expect: { 読み込み: 'ABCビル3F', CSV: '"ABCビル3F"' } }
+    expect: { 読み込み: 'ABCビル3F', CSV: '"ABCビル3F"' } },
+
+  // ---- 11. QRコード・URL ----
+  { group: '11 QRコード', name: '連絡先のQRコード（vCard）→ 氏名・会社・部署・役職・電話・携帯・メール・住所・URL に分ける', type: 'improve',
+    run: function (env) {
+      return env.ev('parseQrText')(['BEGIN:VCARD', 'VERSION:3.0', 'N:山田;太郎;;;', 'FN:山田 太郎', 'ORG:株式会社サンプル商事;営業部', 'TITLE:部長',
+        'TEL;TYPE=WORK,VOICE:03-1234-5678', 'TEL;TYPE=FAX:03-1234-5679', 'TEL;TYPE=CELL:090-1111-2222', 'EMAIL;TYPE=INTERNET:yamada@sample.co.jp',
+        'ADR;TYPE=WORK:;サンプルビル5F;千代田1-2-3;千代田区;東京都;1000001;日本', 'URL:https://sample.co.jp/', 'END:VCARD'].join('\r\n'));
+    },
+    expect: { name: '山田 太郎', company: '株式会社サンプル商事', department: '営業部', title: '部長', phone: '03-1234-5678', mobile: '090-1111-2222',
+      email: 'yamada@sample.co.jp', address: '〒100-0001 東京都千代田区千代田1-2-3 サンプルビル5F', url: 'https://sample.co.jp/' } },
+  { group: '11 QRコード', name: 'MECARD・URL・www・メール・電話のQRコード。どれにも当たらない中身は {} を返す', type: 'improve',
+    run: function (env) {
+      const f = env.ev('parseQrText');
+      return [f('MECARD:N:山田,太郎;TEL:09011112222;EMAIL:yamada@sample.co.jp;URL:https://sample.co.jp;;'), f('https://lin.ee/abcdef'), f('www.sample.co.jp'),
+        f('mailto:info@sample.co.jp?subject=hi'), f('tel:03-1234-5678'), f('こんにちは')];
+    },
+    expect: [{ name: '山田 太郎', mobile: '09011112222', email: 'yamada@sample.co.jp', url: 'https://sample.co.jp' }, { url: 'https://lin.ee/abcdef' }, { url: 'https://www.sample.co.jp' },
+      { email: 'info@sample.co.jp' }, { phone: '03-1234-5678' }, {}] },
+  { group: '11 QRコード', name: 'QRコードの値を優先して入れ、文字で読んだ違う値は候補に残す。どれにも当たらない中身は行の一覧に出す', type: 'improve',
+    run: function (env) {
+      const parsed = { name: '山田 太郎', company: '', department: '', title: '', phone: '', mobile: '', email: 'yarnada@sample.co.jp', address: '', candidates: {}, lines: ['山田 太郎'], linePasses: [] };
+      const r = env.ev('addQrToParsed')(parsed, ['MECARD:N:山田,太郎;EMAIL:yamada@sample.co.jp;;', 'https://sample.co.jp', 'ABC-123']);
+      return { email: r.email, 候補: r.candidates, url: r.url, 文字から: r.urlFromText, 行: r.lines, qr: r.qr };
+    },
+    expect: { email: 'yamada@sample.co.jp', 候補: { email: ['yarnada@sample.co.jp'] }, url: 'https://sample.co.jp', 文字から: false, 行: ['ABC-123', '山田 太郎'],
+      qr: { fields: { name: '山田 太郎', email: 'yamada@sample.co.jp', url: 'https://sample.co.jp' }, others: ['ABC-123'], count: 3 } } },
+  { group: '11 QRコード', name: 'QRコードがない → 名刺に印刷されたURLを文字の読み取り結果から拾う（見比べてもらう印を付ける）', type: 'improve',
+    run: function (env) {
+      function parsed(lines) { return { name: '', company: '', department: '', title: '', phone: '', mobile: '', email: '', address: '', candidates: {}, lines: lines, linePasses: [] }; }
+      const a = env.ev('addQrToParsed')(parsed(['山田 太郎', 'URL https://www.sample.co.jp/', 'TEL 03-1234-5678']), []);
+      const b = env.ev('addQrToParsed')(parsed(['www. sample.co.jp']), []);
+      const c = env.ev('addQrToParsed')(parsed(['山田 太郎']), []);
+      return [[a.url, a.urlFromText], [b.url, b.urlFromText], [c.url, c.urlFromText]];
+    },
+    expect: [['https://www.sample.co.jp/', true], ['https://www.sample.co.jp', true], ['', false]] },
+  { group: '11 QRコード', name: '読み取り結果を入れる → URLの欄に入り、QRコードのメールは赤枠にしない。手で入れたURLは上書きしない', type: 'improve',
+    run: function (env) {
+      function parsed(values, codes) {
+        return env.ev('addQrToParsed')(Object.assign({ name: '', company: '', department: '', title: '', phone: '', mobile: '', email: '', address: '', candidates: {}, quarter: 0, lines: [], linePasses: [] }, values), codes);
+      }
+      env.ev('applyOcrResult')(parsed({ name: '山田 太郎' }, ['MECARD:N:山田,太郎;EMAIL:yamada@sample.co.jp;URL:https://sample.co.jp;;']));
+      const first = { URL: env.el('f_url').value, メールの赤枠: env.el('f_email').classList.contains('needs-check'), 案内: env.el('ocrResultHint').textContent.indexOf('QRコードを読み取りました') === 0 };
+      env.el('f_url').value = 'https://my.example.jp';
+      env.el('f_url').classList.remove('ocr-filled');
+      env.ev('applyOcrResult')(parsed({ lines: ['https://other.example.jp'] }, []));
+      return { 最初: first, 手で直したあと: env.el('f_url').value };
+    },
+    expect: { 最初: { URL: 'https://sample.co.jp', メールの赤枠: false, 案内: true }, 手で直したあと: 'https://my.example.jp' } },
+  { group: '11 QRコード', name: 'URLつきで保存 → 一覧ではリンクになる（http・https 以外はリンクにしない）。CSV・JSON読み込み・差し込み文字 {url} にも出る', type: 'improve',
+    run: async function (env) {
+      await tick();
+      setForm(env, { name: '山田 太郎', url: 'https://sample.co.jp' });
+      env.fire('saveBtn', 'click');
+      await tick();
+      env.el('importInput').files = [{ _text: JSON.stringify([{ name: '危険 次郎', url: 'javascript:alert(1)' }]) }];
+      env.fire('importInput', 'change');
+      await tick(); await tick();
+      const html = env.el('cardList').innerHTML;
+      env.fire('exportCsvBtn', 'click');
+      const lines = env.blobs[env.blobs.length - 1].text.split('\r\n');
+      const head = lines[0].split(/,(?=")/), at = head.indexOf('"URL"');
+      const saved = JSON.parse(env.store[STORAGE_KEY] || '[]');
+      return { 保存: saved.map(function (c) { return c.url; }), リンク: (html.match(/<a href="[^"]*"/g) || []), CSV: [lines[1].split(/,(?=")/)[at], lines[2].split(/,(?=")/)[at]],
+        差し込み: env.ev('fillTemplate')('{url}', saved[0]), 警告: env.alerts };
+    },
+    expect: { 保存: ['https://sample.co.jp', 'javascript:alert(1)'], リンク: ['<a href="https://sample.co.jp"'], CSV: ['"https://sample.co.jp"', '"javascript:alert(1)"'],
+      差し込み: 'https://sample.co.jp', 警告: [] } }
 ];
 
 // CSV（すべての値を "" で囲んだ形）から、見出しが name の列を取り除く。その列がなければそのまま返す
