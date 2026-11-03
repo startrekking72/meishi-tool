@@ -344,8 +344,9 @@ const CASES = [
       return { 保存後の件数: env.ev('cards').length, 保存領域: scrub(JSON.stringify(JSON.parse(env.store[STORAGE_KEY]), null, 1)), 警告: env.alerts };
     },
     stored: true },
-  { group: '既存機能', name: 'CSV書き出しの内容', type: 'keep',
-    run: async function (env) { await tick(); env.fire('exportCsvBtn', 'click'); return scrub(env.blobs.map(function (b) { return b.type + '\n' + b.text; }).join('\n')); },
+  // 建物名の列は新しく足したもの。旧データの名刺では空なので、その列を除いて従来と同じかを比べる
+  { group: '既存機能', name: 'CSV書き出しの内容（足した「建物名」の列を除く）', type: 'keep',
+    run: async function (env) { await tick(); env.fire('exportCsvBtn', 'click'); return scrub(env.blobs.map(function (b) { return b.type + '\n' + dropCsvColumn(b.text, '建物名'); }).join('\n')); },
     stored: true },
   { group: '既存機能', name: 'JSON書き出しの内容', type: 'keep',
     run: async function (env) { await tick(); env.fire('exportBtn', 'click'); return env.blobs.map(function (b) { return b.type + '\n' + b.text; }).join('\n'); },
@@ -407,7 +408,7 @@ const CASES = [
       env.fire('saveBtn', 'click');
       return confirmRows(env);
     },
-    expect: { 赤い未入力: [], 空欄の表示: ['部署', '役職', '固定電話', '携帯電話', 'メール', '住所'] } },
+    expect: { 赤い未入力: [], 空欄の表示: ['部署', '役職', '固定電話', '携帯電話', 'メール', '住所', '建物名'] } },
   { group: '6 任意項目の空欄', name: '確認画面：氏名・会社名が空欄のときは、従来どおり赤で知らせる（保存はできる）', type: 'improve',
     run: async function (env) {
       await tick();
@@ -614,16 +615,17 @@ const CASES = [
       return out;
     },
     expect: { email: '長寿社会への取り組み', phone: '長寿社会への取り組み', title: 'AI活用・出版', memo: '長寿社会への取り組み\nAI活用・出版' } },
-  { group: '8 欄への反映', name: '候補ボタンをタップ → その候補の項目の欄に入る（氏名・メール・住所）', type: 'keep',
+  // 住所の候補は、建物名の欄に分けて入れるようにしたので「10 建物名」で確かめる
+  { group: '8 欄への反映', name: '候補ボタンをタップ → その候補の項目の欄に入る（氏名・メール）', type: 'keep',
     run: function (env) {
       const out = {};
-      [['name', '山田 太郎'], ['email', 'tanaka@example.com'], ['address', '〒100-0001 東京都千代田区千代田1-2-3 ABCビル']].forEach(function (t) {
+      [['name', '山田 太郎'], ['email', 'tanaka@example.com']].forEach(function (t) {
         env.fire('ocrCandidates', 'click', { target: { getAttribute: function (k) { return k === 'data-f' ? t[0] : (k === 'data-v' ? t[1] : null); } } });
         out[t[0]] = env.el('f_' + t[0]).value;
       });
       return out;
     },
-    expect: { name: '山田 太郎', email: 'tanaka@example.com', address: '〒100-0001 東京都千代田区千代田1-2-3 ABCビル' } },
+    expect: { name: '山田 太郎', email: 'tanaka@example.com' } },
   { group: '8 欄への反映', name: '「部署と役職の内容を入れ替える」→ 役職に入った肩書きを部署へ移せる', type: 'improve',
     run: function (env) {
       setForm(env, { department: '', title: 'AIプレゼンター' });
@@ -704,8 +706,90 @@ const CASES = [
       const all = JSON.parse(env.store[STORAGE_KEY] || '[]');
       return { 裏面だけ: { 件数: saved.length, 表面: saved[0] && saved[0].photo, 裏面: saved[0] && saved[0].photoBack }, 読み込み後の裏面: all[1] && all[1].photoBack, 警告: env.alerts };
     },
-    expect: { 裏面だけ: { 件数: 1, 表面: '', 裏面: 'data:image/jpeg;base64,ONLYBACK' }, 読み込み後の裏面: 'data:image/jpeg;base64,B', 警告: [] } }
+    expect: { 裏面だけ: { 件数: 1, 表面: '', 裏面: 'data:image/jpeg;base64,ONLYBACK' }, 読み込み後の裏面: 'data:image/jpeg;base64,B', 警告: [] } },
+
+  // ---- 10. 建物名・階・部屋番号の欄 ----
+  { group: '10 建物名', name: '住所を番地までと、その後ろの建物名・階・部屋番号に分ける', type: 'improve',
+    run: function (env) {
+      const f = env.ev('separateBuilding');
+      return ['〒100-0001 東京都千代田区千代田1-2-3 サンプルビル5F', '東京都港区六本木6丁目10-1 六本木ヒルズ森タワー 25F', '大阪府大阪市北区梅田1-1-3大阪駅前第3ビル',
+        '北海道札幌市中央区北1条西2丁目3番5号 札幌ビル', '東京都新宿区西新宿2-8-1 ハイツ101号室', '東京都千代田区千代田1-2-3 山田ビル(5階)'].map(function (a) { const p = f(a); return p.address + ' ｜ ' + p.building; });
+    },
+    expect: ['〒100-0001 東京都千代田区千代田1-2-3 ｜ サンプルビル5F', '東京都港区六本木6丁目10-1 ｜ 六本木ヒルズ森タワー 25F', '大阪府大阪市北区梅田1-1-3 ｜ 大阪駅前第3ビル',
+      '北海道札幌市中央区北1条西2丁目3番5号 ｜ 札幌ビル', '東京都新宿区西新宿2-8-1 ｜ ハイツ101号室', '東京都千代田区千代田1-2-3 ｜ 山田ビル(5階)'] },
+  { group: '10 建物名', name: '建物名がない住所・番地のない住所・番地に続く1文字だけの読み → 分けずに全体を住所にする', type: 'improve',
+    run: function (env) {
+      const f = env.ev('separateBuilding');
+      return ['東京都千代田区千代田1-2-3', '東京都港区', '東京都千代田区千代田1-2-35F', ''].map(function (a) { const p = f(a); return p.address + ' ｜ ' + p.building; });
+    },
+    expect: ['東京都千代田区千代田1-2-3 ｜ ', '東京都港区 ｜ ', '東京都千代田区千代田1-2-35F ｜ ', ' ｜ '] },
+  { group: '10 建物名', name: '建物名が住所の次の行に分かれている → つなげて読む（会社名・電話の行はつなげない）', type: 'improve',
+    run: function (env) {
+      const f = env.ev('extractAddress');
+      return [f(['〒100-0001', '東京都千代田区千代田1-2-3', 'サンプルビル 5F', 'TEL 03-1234-5678']), f(['東京都千代田区千代田', '1-2-3', '森タワー 25階']),
+        f(['東京都千代田区千代田1-2-3', '株式会社ビルド']), f(['東京都千代田区千代田1-2-3', 'TEL 03-1234-5678 5F']), f(['東京都千代田区千代田1-2-3 TEL 03-1111-2222', 'サンプルビル5F'])];
+    },
+    expect: ['〒100-0001 東京都千代田区千代田1-2-3 サンプルビル5F', '東京都千代田区千代田1-2-3 森タワー25階', '東京都千代田区千代田1-2-3', '東京都千代田区千代田1-2-3', '東京都千代田区千代田1-2-3'] },
+  { group: '10 建物名', name: '読み取り結果を入れる → 住所の欄は番地まで、建物名の欄に建物名。手で入れた建物名は上書きしない', type: 'improve',
+    run: function (env) {
+      function parsed(values) { return Object.assign({ name: '', company: '', department: '', title: '', phone: '', mobile: '', email: '', address: '', candidates: {}, quarter: 0, lines: [], linePasses: [] }, values); }
+      env.ev('applyOcrResult')(parsed({ name: '山田 太郎', address: '〒100-0001 東京都千代田区千代田1-2-3 サンプルビル5F' }));
+      const first = { 住所: env.el('f_address').value, 建物名: env.el('f_building').value, 案内: /住所・建物名/.test(env.el('ocrResultHint').textContent) };
+      env.el('f_building').value = '本館3階';
+      env.el('f_building').classList.remove('ocr-filled');
+      env.ev('applyOcrResult')(parsed({ address: '東京都千代田区千代田1-2-3 別館ビル' }));
+      return { 最初: first, 手で直したあと: { 住所: env.el('f_address').value, 建物名: env.el('f_building').value } };
+    },
+    expect: { 最初: { 住所: '〒100-0001 東京都千代田区千代田1-2-3', 建物名: 'サンプルビル5F', 案内: true }, 手で直したあと: { 住所: '東京都千代田区千代田1-2-3', 建物名: '本館3階' } } },
+  { group: '10 建物名', name: '住所の候補・行を住所に入れる → 建物名は建物名の欄へ。番地までの行を入れても、入っている建物名は消さない', type: 'improve',
+    run: function (env) {
+      env.fire('ocrCandidates', 'click', { target: { getAttribute: function (k) { return k === 'data-f' ? 'address' : (k === 'data-v' ? '〒100-0001 東京都千代田区千代田1-2-3 ABCビル' : null); } } });
+      const pick = { 住所: env.el('f_address').value, 建物名: env.el('f_building').value };
+      shownLines(env, [['東京都港区芝公園4-2-8', '東京タワービル 2F']], {}, { merge: false, hideUsed: false });
+      function assign(f, i) {
+        const row = { getAttribute: function () { return String(i); } };
+        env.fire('ocrLines', 'click', { target: { getAttribute: function (k) { return k === 'data-f' ? f : null; }, closest: function () { return row; }, textContent: f } });
+      }
+      assign('address', 0);
+      const line = { 住所: env.el('f_address').value, 建物名: env.el('f_building').value };
+      assign('building', 1);
+      return { 候補: pick, 番地までの行: line, 建物名の行: env.el('f_building').value };
+    },
+    expect: { 候補: { 住所: '〒100-0001 東京都千代田区千代田1-2-3', 建物名: 'ABCビル' }, 番地までの行: { 住所: '東京都港区芝公園4-2-8', 建物名: 'ABCビル' }, 建物名の行: '東京タワービル 2F' } },
+  { group: '10 建物名', name: '建物名つきで保存 → 残り、一覧・お礼メールの {address} では住所につなげて出る。{building} は建物名だけ', type: 'improve',
+    run: async function (env) {
+      await tick();
+      setForm(env, { name: '山田 太郎', address: '〒100-0001 東京都千代田区千代田1-2-3', building: 'サンプルビル5F' });
+      env.fire('saveBtn', 'click');
+      await tick();
+      const saved = JSON.parse(env.store[STORAGE_KEY] || '[]')[0] || {};
+      const row = /<span class="k">住所<\/span><span>([^<]*)<\/span>/.exec(env.el('cardList').innerHTML);
+      env.ev('fillForm')(env.ev('cards')[0]);
+      return { 保存: [saved.address, saved.building], 一覧: row && row[1], 差し込み: env.ev('fillTemplate')('{address}／{building}', saved), 編集で開く: env.el('f_building').value, 警告: env.alerts };
+    },
+    expect: { 保存: ['〒100-0001 東京都千代田区千代田1-2-3', 'サンプルビル5F'], 一覧: '〒100-0001 東京都千代田区千代田1-2-3 サンプルビル5F',
+      差し込み: '〒100-0001 東京都千代田区千代田1-2-3 サンプルビル5F／サンプルビル5F', 編集で開く: 'サンプルビル5F', 警告: [] } },
+  { group: '10 建物名', name: 'JSON読み込みで建物名が残り、CSVの「建物名」の列に出る', type: 'improve',
+    run: async function (env) {
+      await tick();
+      env.el('importInput').files = [{ _text: JSON.stringify([{ name: '建物 一郎', address: '東京都千代田区千代田1-1', building: 'ABCビル3F' }]) }];
+      env.fire('importInput', 'change');
+      await tick(); await tick();
+      env.fire('exportCsvBtn', 'click');
+      const lines = env.blobs[env.blobs.length - 1].text.split('\r\n');
+      const head = lines[0].split(/,(?=")/), row = lines[1].split(/,(?=")/);
+      return { 読み込み: (JSON.parse(env.store[STORAGE_KEY] || '[]')[0] || {}).building, CSV: row[head.indexOf('"建物名"')] };
+    },
+    expect: { 読み込み: 'ABCビル3F', CSV: '"ABCビル3F"' } }
 ];
+
+// CSV（すべての値を "" で囲んだ形）から、見出しが name の列を取り除く。その列がなければそのまま返す
+function dropCsvColumn(text, name) {
+  const lines = text.split('\r\n');
+  const at = lines[0].replace(/^﻿/, '').split(/,(?=")/).indexOf('"' + name + '"');
+  if (at === -1) return text;
+  return lines.map(function (l) { if (!l) return l; const cells = l.split(/,(?=")/); cells.splice(at, 1); return cells.join(','); }).join('\r\n');
+}
 
 // ---- 図柄を消す処理のための、白黒の絵（1＝黒）。index.html の findGraphics が受け取る canvas の代わり ----
 function makeBitmap(W, H) {

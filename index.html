@@ -404,7 +404,11 @@
       </div>
       <div class="field full">
         <label>住所</label>
-        <input type="text" id="f_address" placeholder="東京都〇〇区…">
+        <input type="text" id="f_address" placeholder="〒100-0001 東京都〇〇区〇〇1-2-3">
+      </div>
+      <div class="field full">
+        <label>建物名・階・部屋番号</label>
+        <input type="text" id="f_building" placeholder="〇〇ビル 5F">
       </div>
       <div class="field">
         <label>名刺交換日</label>
@@ -424,7 +428,7 @@
       <button class="btn-primary btn-big" id="saveBtn">保存する</button>
       <button id="cancelEditBtn" style="display:none;">編集をキャンセル</button>
     </div>
-    <div class="hint">氏名・会社名・写真のどれか1つがあれば保存できます。部署・役職・電話番号・メールアドレス・住所・交流会名・会話メモは、名刺に書かれていなければ空欄のままで構いません。</div>
+    <div class="hint">氏名・会社名・写真のどれか1つがあれば保存できます。部署・役職・電話番号・メールアドレス・住所・建物名・交流会名・会話メモは、名刺に書かれていなければ空欄のままで構いません。</div>
   </section>
 
   <div class="toolbar">
@@ -463,7 +467,7 @@
       <button id="resetTemplateBtn">初期のひな形に戻す</button>
     </div>
     <div class="hint">
-      使える差し込み文字：{name}氏名 {company}会社名 {department}部署 {title}役職 {phone}電話番号 {mobile}携帯電話番号 {email}メール {address}住所 {metDate}交換日 {metDateJp}交換日（〇月〇日） {eventName}交流会名 {memo}会話メモ {myName}自分の名前 {sender}署名<br>
+      使える差し込み文字：{name}氏名 {company}会社名 {department}部署 {title}役職 {phone}電話番号 {mobile}携帯電話番号 {email}メール {address}住所（建物名まで） {building}建物名 {metDate}交換日 {metDateJp}交換日（〇月〇日） {eventName}交流会名 {memo}会話メモ {myName}自分の名前 {sender}署名<br>
       {salutation}＝「氏名 様」（氏名が空なら「ご担当者様」）　{occasion}＝交換日と交流会名から作る書き出し（例：「10月9日の「〇〇交流会」では、」。どちらも空なら「先日は、」）<br>
       [[ ]] で囲んだ部分は、中の差し込み文字が空欄のとき丸ごと省略されます（例：[[{company}の皆様]]）。
     </div>
@@ -663,7 +667,7 @@
   var mailCloseBtn = document.getElementById('mailCloseBtn');
   var currentMailCard = null;
 
-  var fields = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address', 'metDate', 'eventName', 'memo'];
+  var fields = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address', 'building', 'metDate', 'eventName', 'memo'];
   var currentPhotoDataUrl = '';
   var ocrSourceImage = null;
   // 補正・回転する前の写真。補正後の写真（currentPhotoDataUrl）とは別に残す
@@ -852,10 +856,12 @@
       if (day) return day + 'は、';
       return '先日は、';
     }
+    // {address} は建物名まで含めた住所全体。{building} は建物名だけ
+    if (key === 'address') return fullAddress(card);
     return card[key] || '';
   }
 
-  var TOKEN_RE = /\{(name|company|department|title|phone|mobile|email|address|metDate|metDateJp|eventName|memo|myName|sender|salutation|occasion)\}/g;
+  var TOKEN_RE = /\{(name|company|department|title|phone|mobile|email|address|building|metDate|metDateJp|eventName|memo|myName|sender|salutation|occasion)\}/g;
 
   function fillTemplate(str, card) {
     // [[ ]] の中の差し込み文字がひとつでも空なら、その部分を丸ごと省く
@@ -1350,9 +1356,14 @@
       var addr = stop ? rest.slice(0, stop.index) : rest;
       // 番地だけが次の行に分かれている場合はつなげる
       var next = lines[i + 1] ? squeezeJa(lines[i + 1]) : '';
+      var after = i + 1;
       if (!/\d/.test(addr) && /^\d[\d\-.]*(\s|$)/.test(next) && !/^\d{3}-\d{4}$/.test(next) && !/\d{2,4}-\d{2,4}-\d{3,4}/.test(next)) {
         addr += next.split(stop ? /$^/ : stopRe)[0];
+        after = i + 2;
       }
+      // 建物名が次の行に分かれている場合もつなげる（「〇〇ビル 5F」のように、建物を表す語がある行だけ）
+      var building = lines[after] ? squeezeJa(lines[after]) : '';
+      if (!stop && /\d/.test(addr) && !separateBuilding(addr).building && isBuildingLine(building)) addr += ' ' + building;
       if (!/\d/.test(addr)) continue;
       // 番地の後ろは、建物名らしい3文字以上のまとまりだけ残し、1〜2文字の読み違いは落とす
       // 括弧の内側は「( 5 階 )」のように空白が入って読まれることがあるので、括弧の際と数字の後ろの空白を詰める
@@ -1368,6 +1379,31 @@
       if (value.length > best.length) best = value;
     }
     return best;
+  }
+
+  var BUILDING_WORD_RE = /(ビル|タワー|マンション|ハイツ|コーポ|レジデンス|ヒルズ|プラザ|会館|号館|号棟|号室|\d+\s*(?:F|階)|Bldg|Building)/i;
+  function isBuildingLine(text) {
+    return !!text && text.replace(/\s+/g, '').length <= 30 && BUILDING_WORD_RE.test(text) &&
+      !/(TEL|FAX|電話|携帯|Mobile|E-?mail|URL|https?:|www\.|@)/i.test(text) && !/\d{2,4}-\d{2,4}-\d{3,4}/.test(text) &&
+      !/[都道府県市区郡]/.test(text.replace(/(ビル|タワー|会館|号館)/g, '')) && !COMPANY_RE.test(text);
+  }
+
+  // 住所を、番地まで（郵便番号・都道府県〜番地）と、その後ろの建物名・階・部屋番号に分ける。
+  // 番地の数字が見つからないときは分けずに、全体を住所とする
+  var STREET_RE = /^([\s\S]*?[^\d\s\-]\s*\d+(?:\s*(?:丁目|番地|番|号(?!室)|条[東西南北]?|地割|の|[-－ー‐])\s*\d+)*(?:\s*(?:丁目|番地|番|号(?!室)|条))?)\s*([\s\S]*)$/;
+  function separateBuilding(value) {
+    var text = String(value || '').trim();
+    var postal = /^(〒?\s*\d{3}-?\d{4}\s*)/.exec(text);
+    var head = postal ? postal[1] : '';
+    var m = STREET_RE.exec(text.slice(head.length));
+    // 「1-2-35F」の「F」のように1文字だけ残ったものは、建物名とみなさずに住所に残す
+    if (!m || m[2].replace(/\s+/g, '').length < 2) return { address: text, building: '' };
+    return { address: (head + m[1]).trim(), building: m[2].trim() };
+  }
+
+  // 住所の欄と建物名の欄をつないだ、住所全体（一覧・差し込み文字・CSV で使う）
+  function fullAddress(card) {
+    return [card.address, card.building].filter(Boolean).join(' ');
   }
 
   // 隣の図柄などを読み違えて前後に付いた記号（「【」など）を取り除く。文字そのものは変えない
@@ -2432,7 +2468,7 @@
     });
   }
 
-  var USED_FIELDS = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address'];
+  var USED_FIELDS = ['name', 'company', 'department', 'title', 'phone', 'mobile', 'email', 'address', 'building'];
   var USED_LABEL_RE = /(tel|phone|mobile|cell|e-?mail|mail|電話|携帯|〒)/g;
 
   // 行の中身が、すでに入力欄に入っている内容だけでできているか（見出しの「TEL」などは除いて考える）
@@ -2571,7 +2607,7 @@
 
   var ASSIGN_TARGETS = [
     ['name', '氏名'], ['company', '会社名'], ['department', '部署'], ['title', '役職'],
-    ['phone', '電話'], ['mobile', '携帯'], ['email', 'メール'], ['address', '住所'], ['memo', 'メモに追記']
+    ['phone', '電話'], ['mobile', '携帯'], ['email', 'メール'], ['address', '住所'], ['building', '建物名'], ['memo', 'メモに追記']
   ];
 
   // lines は読み取った行（重なりを除いたもの）、passes は読み取りごとの行。どちらも元のまま持っておき、表示のときだけ整理する
@@ -2627,8 +2663,22 @@
       value = f === 'phone' ? (phones.phone || phones.mobile) : (phones.mobile || phones.phone);
     } else if (f === 'address') value = extractAddress([text]);
     else if (f === 'company') value = trimJunk(COMPANY_RE.test(tidy) ? pickCompany(tidy) : tidy);
-    else if (f === 'name' || f === 'department' || f === 'title') value = trimJunk(text);
+    else if (f === 'name' || f === 'department' || f === 'title' || f === 'building') value = trimJunk(text);
     return value || line;
+  }
+
+  // 住所を、住所の欄（番地まで）と建物名の欄に分けて入れる。
+  // how: 'ocr' は自動入力（建物名の欄は、空欄か前回の自動入力のままのときだけ書き換える）、
+  // 'pick' は候補を選んだとき（両方を書き換える）、'line' は行を住所に入れたとき（建物名が含まれていたときだけ書き換える）
+  function fillAddress(value, how) {
+    var parts = separateBuilding(value);
+    var address = document.getElementById('f_address'), building = document.getElementById('f_building');
+    address.value = parts.address;
+    if (how === 'ocr' ? (building.value && !building.classList.contains('ocr-filled')) : (how === 'line' && !parts.building)) return parts;
+    building.value = parts.building;
+    building.classList.remove('needs-check', 'has-candidates', 'ocr-filled');
+    if (how === 'ocr' && parts.building) building.classList.add('ocr-filled');
+    return parts;
   }
 
   // 肩書きは部署とも役職とも読めることがあるので、自動の振り分けが合わなかったときにひと押しで入れ替えられるようにする
@@ -2665,7 +2715,16 @@
       input.value = input.value ? (input.value.replace(/\s+$/, '') + '\n' + text) : text;
     } else {
       text = refineForField(f, text);
-      input.value = text;
+      if (f === 'address') {
+        var parts = fillAddress(text, 'line');
+        document.getElementById('f_building').classList.remove('needs-check', 'has-candidates', 'ocr-filled');
+        if (parts.building) {
+          input.classList.remove('needs-check', 'has-candidates', 'ocr-filled');
+          setStatus('「' + parts.address + '」を住所に、「' + parts.building + '」を建物名に入れました');
+          renderOcrLines();
+          return;
+        }
+      } else input.value = text;
       input.classList.remove('needs-check', 'has-candidates', 'ocr-filled');
     }
     setStatus('「' + text + '」を' + e.target.textContent + 'に入れました');
@@ -2689,7 +2748,8 @@
     var f = e.target.getAttribute('data-f');
     if (!f) return;
     var input = document.getElementById('f_' + f);
-    input.value = e.target.getAttribute('data-v');
+    if (f === 'address') fillAddress(e.target.getAttribute('data-v'), 'pick');
+    else input.value = e.target.getAttribute('data-v');
     // 利用者が選んだ値なので、強調を外して手入力と同じ扱いにする
     input.classList.remove('needs-check', 'has-candidates', 'ocr-filled');
     setStatus(OCR_LABELS[f] + 'に候補を入力しました。違うところがあれば手で直してください');
@@ -2865,15 +2925,19 @@
       var replaceable = !input.value || input.classList.contains('ocr-filled');
       input.classList.remove('needs-check', 'has-candidates');
       if (parsed[f] && replaceable) {
-        input.value = parsed[f];
+        // 住所は番地までを住所の欄に、その後ろの建物名・階は建物名の欄に入れる
+        var building = f === 'address' ? fillAddress(parsed[f], 'ocr').building : '';
+        if (f !== 'address') input.value = parsed[f];
         input.classList.add('ocr-filled');
         // 一致して読めた場合でも同じ読み違いが重なることがあるので、メールは必ず見比べてもらう
         if (f === 'email') input.classList.add('needs-check');
         filled.push(labels[f]);
+        if (building) filled.push('建物名');
       } else if (parsed.candidates[f] && replaceable) {
         // 読み方が分かれた項目は空欄にして、ここだけ目立たせる
         input.value = '';
         input.classList.remove('ocr-filled');
+        if (f === 'address') fillAddress('', 'ocr');
         if (KEY_OCR_FIELDS.indexOf(f) !== -1) { input.classList.add('needs-check'); missing.push(labels[f]); }
         else { input.classList.add('has-candidates'); optional.push(labels[f]); }
       } else if (!input.value && KEY_OCR_FIELDS.indexOf(f) !== -1) {
@@ -3009,7 +3073,7 @@
       if (c.phone) rows += '<div class="card-row"><span class="k">電話</span><span>' + esc(c.phone) + '</span></div>';
       if (c.mobile) rows += '<div class="card-row"><span class="k">携帯</span><span>' + esc(c.mobile) + '</span></div>';
       if (c.email) rows += '<div class="card-row"><span class="k">メール</span><span>' + esc(c.email) + '</span></div>';
-      if (c.address) rows += '<div class="card-row"><span class="k">住所</span><span>' + esc(c.address) + '</span></div>';
+      if (c.address || c.building) rows += '<div class="card-row"><span class="k">住所</span><span>' + esc(fullAddress(c)) + '</span></div>';
       if (c.metDate) rows += '<div class="card-row"><span class="k">交換日</span><span>' + esc(c.metDate) + '</span></div>';
       if (c.eventName) rows += '<div class="card-row"><span class="k">交流会</span><span>' + esc(c.eventName) + '</span></div>';
       var memo = c.memo ? '<div class="card-memo">' + esc(c.memo) + '</div>' : '';
@@ -3113,7 +3177,7 @@
     var emailOk = !v.email || EMAIL_FORMAT_RE.test(v.email);
     if (!ocrUsed && emailOk) { doSave(); return; }
     // 3番目が true の項目（氏名・会社名）だけ、空欄を赤で知らせる。ほかは名刺に書かれていないことがあるので、空欄と分かる表示にとどめる
-    var rows = [['氏名', v.name, true], ['会社名', v.company, true], ['部署', v.department], ['役職', v.title], ['固定電話', v.phone], ['携帯電話', v.mobile], ['メール', v.email], ['住所', v.address]];
+    var rows = [['氏名', v.name, true], ['会社名', v.company, true], ['部署', v.department], ['役職', v.title], ['固定電話', v.phone], ['携帯電話', v.mobile], ['メール', v.email], ['住所', v.address], ['建物名', v.building]];
     var html = rows.map(function (r) {
       var empty = r[2] ? '<span style="color:var(--danger);">（未入力）</span>' : '<span style="color:var(--sub);">（空欄のまま保存します）</span>';
       return '<div class="card-row"><span class="k">' + r[0] + '</span><span>' + (r[1] ? esc(r[1]) : empty) + '</span></div>';
@@ -3142,6 +3206,8 @@
     var message;
     var existing = editingId ? cards.find(function (c) { return c.id === editingId; }) : null;
     // 裏面の項目は、裏面の写真があるとき（と、裏面を消すとき）だけ持たせる。片面だけの名刺のデータは従来と同じ形
+    // 建物名も、入力したとき（と、消すとき）だけ持たせる
+    if (!v.building && !(existing && existing.building)) delete v.building;
     if (back.photo || (existing && existing.photoBack)) {
       v.photoBack = back.photo;
       v.photoBackOriginal = (back.original && back.original !== back.photo) ? back.original : '';
@@ -3231,7 +3297,7 @@
   exportCsvBtn.addEventListener('click', function () {
     var columns = [
       ['氏名', 'name'], ['会社名', 'company'], ['部署', 'department'], ['役職', 'title'],
-      ['電話番号', 'phone'], ['携帯電話番号', 'mobile'], ['メールアドレス', 'email'], ['住所', 'address'],
+      ['電話番号', 'phone'], ['携帯電話番号', 'mobile'], ['メールアドレス', 'email'], ['住所', 'address'], ['建物名', 'building'],
       ['名刺交換日', 'metDate'], ['交流会名', 'eventName'], ['会話メモ', 'memo']
     ];
     var header = columns.map(function (c) { return csvCell(c[0]); }).concat([csvCell('お礼メール下書き日時'), csvCell('登録日時'), csvCell('更新日時')]);
@@ -3278,6 +3344,7 @@
             createdAt: item.createdAt || now,
             updatedAt: now
           };
+          if (item.building) card.building = item.building;
           // 裏面の写真は、ある名刺だけ持たせる（片面だけの名刺は従来と同じ形）
           if (item.photoBack) {
             card.photoBack = item.photoBack;
