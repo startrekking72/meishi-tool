@@ -66,10 +66,11 @@ check('住所（ADR・LABEL）を載せていない', !card.props.some(function 
 check('ファイルのどこにも、電話番号らしい数字の並びがない', !PHONE_LIKE_RE.test(card.text));
 
 console.log('■ 従来の項目が残っている');
-[['ORG', '有限会社アークリー'], ['TITLE', '代表'], ['EMAIL', 'arcly4@gmail.com'], ['NOTE', '不老死労 / AI活用・出版・長寿社会への取り組み'], ['URL', 'https://startrekking72.github.io/meishi-tool/card.html']]
+[['ORG', '有限会社アークリー'], ['TITLE', '代表／AIプレゼンター'],['EMAIL', 'arcly4@gmail.com'], ['NOTE', '不老死労 / AI活用・出版・長寿社会への取り組み'], ['URL', 'https://startrekking72.github.io/meishi-tool/card.html']]
   .forEach(function (t) { const p = one(card, t[0]); check(t[0] + ' = ' + t[1], !!p && p.value === t[1]); });
 check('EMAIL の属性（TYPE=INTERNET）もそのまま', one(card, 'EMAIL').params.join(';') === 'TYPE=INTERNET');
-const oldLines = parseVcard(before).raw.filter(Boolean);
+// 肩書きは電子名刺ページに合わせて「代表」から「代表／AIプレゼンター」に変えたので、修正前の行もその値に読み替えて比べる
+const oldLines = parseVcard(before).raw.filter(Boolean).map(function (l) { return l === 'TITLE:代表' ? 'TITLE:代表／AIプレゼンター' : l; });
 const newLines = card.raw.filter(Boolean);
 check('修正前（' + BASE_REF + '）の行は、すべて同じ内容・同じ順番で残っている', oldLines.every(function (l) { return newLines.indexOf(l) !== -1; }) &&
   JSON.stringify(newLines.filter(function (l) { return oldLines.indexOf(l) !== -1; })) === JSON.stringify(oldLines));
@@ -100,7 +101,8 @@ const rows = els.contactRows.children.map(function (row) { return { label: row.c
 check('電話番号の行（電話・携帯）は出ていない', !rows.some(function (r) { return r.label === '電話' || r.label === '携帯' || /^tel:/.test(r.href); }));
 check('メールの行は従来どおり（mailto:arcly4@gmail.com）', rows.some(function (r) { return r.label === 'メール' && r.href === 'mailto:arcly4@gmail.com'; }));
 check('連絡先の行はメールの1つだけ（電話番号・住所は出ていない）', JSON.stringify(rows.map(function (r) { return r.label; })) === JSON.stringify(['メール']));
-check('表示名・本名・会社名・肩書きは従来どおり', els.pHandle.textContent === '明日しよう' && els.pName.textContent === '西川 尚' && els.pCompany.textContent === '有限会社アークリー' && els.pTitle.textContent === '代表');
+// 肩書きは a5ef9ce で「代表」から「代表／AIプレゼンター」に変えた（連絡先ファイルの TITLE も同じ値）
+check('表示名・本名・会社名・肩書きはプロフィールのとおり', els.pHandle.textContent === '明日しよう' && els.pName.textContent === '西川 尚' && els.pCompany.textContent === '有限会社アークリー' && els.pTitle.textContent === '代表／AIプレゼンター', els.pTitle.textContent);
 check('QRコードの中身は電子名刺のURL（連絡先ファイルの URL と同じ）', qrText === 'https://startrekking72.github.io/meishi-tool/card.html' && qrText === one(card, 'URL').value, String(qrText));
 check('「連絡先に保存する」は nishikawa.vcf を開く', /id="vcardBtn" href="nishikawa\.vcf"/.test(html));
 check('ページに住所・郵便番号が書かれていない', !/〒|住所|\d{3}-\d{4}(?!-)/.test(html));
